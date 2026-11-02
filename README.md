@@ -6,7 +6,20 @@ Icelos takes video files in and hands them back in a new format or a smaller siz
 
 ## Status
 
-Early planning. Nothing is built yet. The goals below describe where the project is headed, not what works today.
+Early and unreleased. The converter engine, the command line tool, and the Mac app work from source, with presets for common targets, target-size compression, and a job queue. There are no signed builds yet. The goals below describe where the project is headed, not what works today.
+
+## Build from source
+
+Icelos needs Go, Xcode or the Swift toolchain, and FFmpeg on the PATH (for example `brew install ffmpeg`).
+
+```sh
+go test ./...
+go run . presets
+go run . convert --preset compatible input.mov
+mac/bundle.sh
+```
+
+`mac/bundle.sh` writes an unsigned `Icelos.app` to `mac/.build/`.
 
 ## Goals
 
