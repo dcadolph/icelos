@@ -328,7 +328,7 @@ func TestRealFFmpeg(t *testing.T) {
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
 			p := testPreset(t, test.Preset)
-			out, err := OutputPath(src, p.Ext, "")
+			out, err := OutputPath(src, p.Ext, "", nil)
 			if err != nil {
 				t.Fatal(err)
 			}

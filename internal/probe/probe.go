@@ -83,13 +83,13 @@ func (i Info) FirstAudio() (Stream, bool) {
 // Info holds the metadata for one media file.
 type Info struct {
 	// Format is the container short name list, e.g. "mov,mp4,m4a,3gp,3g2,mj2".
-	Format string
+	Format string `json:"format"`
 	// Duration is the total playing time.
-	Duration time.Duration
+	Duration time.Duration `json:"durationNs"`
 	// Size is the file size in bytes.
-	Size int64
+	Size int64 `json:"size"`
 	// Streams lists every stream in the file.
-	Streams []Stream
+	Streams []Stream `json:"streams"`
 }
 
 // rawOutput mirrors the ffprobe JSON document.

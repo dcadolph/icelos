@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -14,6 +15,7 @@ func TestOutputPath(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		Want     error
+		Taken    []string
 		Existing []string
 		Ext      string
 		Dir      string
@@ -26,6 +28,8 @@ func TestOutputPath(t *testing.T) {
 		Existing: []string{"clip.mp4", "clip 2.mp4"}, Ext: "mp4", WantName: "clip 3.mp4",
 	}, { // Test 3: Separate output folder.
 		Ext: "m4a", Dir: "out", WantName: "out/clip.m4a",
+	}, { // Test 4: Names reserved by the caller are skipped.
+		Existing: []string{"clip.mp4"}, Taken: []string{"clip 2.mp4"}, Ext: "mp4", WantName: "clip 3.mp4",
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
@@ -41,7 +45,8 @@ func TestOutputPath(t *testing.T) {
 			if test.Dir != "" {
 				dir = filepath.Join(root, test.Dir)
 			}
-			got, err := OutputPath(in, test.Ext, dir)
+			taken := func(p string) bool { return slices.Contains(test.Taken, filepath.Base(p)) }
+			got, err := OutputPath(in, test.Ext, dir, taken)
 			if !errors.Is(err, test.Want) {
 				t.Fatalf("error = %v, want %v", err, test.Want)
 			}

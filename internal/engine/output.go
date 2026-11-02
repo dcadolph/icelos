@@ -12,9 +12,10 @@ import (
 const maxNameTries = 999
 
 // OutputPath returns a free path for converting input to a file ending in ext. The file goes
-// in dir, or next to input when dir is empty. Taken names get a Finder-style number, e.g.
-// "clip 2.mp4", and the input itself is never chosen.
-func OutputPath(input, ext, dir string) (string, error) {
+// in dir, or next to input when dir is empty. Names on disk or reported by taken get a
+// Finder-style number, e.g. "clip 2.mp4", and the input itself is never chosen. A nil taken
+// checks the disk only.
+func OutputPath(input, ext, dir string, taken func(string) bool) (string, error) {
 	in, err := filepath.Abs(input)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrOutput, err)
@@ -32,7 +33,7 @@ func OutputPath(input, ext, dir string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("%w: %w", ErrOutput, err)
 		}
-		if candidate == in {
+		if candidate == in || (taken != nil && taken(candidate)) {
 			continue
 		}
 		if _, err := os.Lstat(candidate); os.IsNotExist(err) {

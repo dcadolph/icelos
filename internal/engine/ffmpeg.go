@@ -46,6 +46,11 @@ func WithFFmpeg(bin string, prober Prober) *FFmpeg {
 	return &FFmpeg{bin: bin, prober: prober}
 }
 
+// Bin returns the ffmpeg executable path.
+func (f *FFmpeg) Bin() string {
+	return f.bin
+}
+
 // Encoders returns the encoder names the ffmpeg binary offers.
 func (f *FFmpeg) Encoders(ctx context.Context) (EncoderSet, error) {
 	f.mu.Lock()

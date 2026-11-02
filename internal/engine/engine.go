@@ -32,13 +32,13 @@ type Progress struct {
 	// Passes is the total pass count.
 	Passes int `json:"passes"`
 	// Elapsed is the media time encoded so far in this pass.
-	Elapsed time.Duration `json:"elapsed"`
+	Elapsed time.Duration `json:"elapsedNs"`
 	// Speed is the encode speed as a multiple of real time.
 	Speed float64 `json:"speed"`
 	// FPS is the current encoding frame rate.
 	FPS float64 `json:"fps"`
 	// ETA is the estimated time left, or zero when unknown.
-	ETA time.Duration `json:"eta"`
+	ETA time.Duration `json:"etaNs"`
 	// Encoder is the ffmpeg video encoder in use, or empty for audio or copied video.
 	Encoder string `json:"encoder,omitempty"`
 	// Hardware is true when Encoder runs on the media engine.
