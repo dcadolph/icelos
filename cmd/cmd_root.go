@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -36,24 +37,39 @@ through an ICELOS_ environment variable, e.g. ICELOS_OUT_DIR for --out-dir.`,
 	return cmd
 }
 
+// toolDirs are checked after PATH, since apps opened from Finder get a minimal PATH.
+var toolDirs = []string{"/opt/homebrew/bin", "/usr/local/bin"} //nolint:gochecknoglobals // Read-only.
+
 // resolveTool returns the configured path for a tool, else the copy beside the running
-// binary, which is where the app bundle keeps it, else the bare name for a PATH lookup.
+// binary, which is where the app bundle keeps it, else a PATH match, else a Homebrew copy,
+// else the bare name so the error names the missing tool.
 func resolveTool(name, configured string) string {
 	if configured != "" {
 		return configured
 	}
-	exe, err := os.Executable()
-	if err != nil {
-		return name
+	if exe, err := os.Executable(); err == nil {
+		if real, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = real
+		}
+		if candidate := filepath.Join(filepath.Dir(exe), name); isExecutable(candidate) {
+			return candidate
+		}
 	}
-	if real, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = real
+	if p, err := exec.LookPath(name); err == nil {
+		return p
 	}
-	candidate := filepath.Join(filepath.Dir(exe), name)
-	if fi, err := os.Stat(candidate); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
-		return candidate
+	for _, dir := range toolDirs {
+		if candidate := filepath.Join(dir, name); isExecutable(candidate) {
+			return candidate
+		}
 	}
 	return name
+}
+
+// isExecutable reports whether path is a regular file with an execute bit set.
+func isExecutable(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0
 }
 
 // newEngine returns the ffmpeg driver and prober for the configured tools.
