@@ -1,4 +1,6 @@
-# Icelos
+<p align="center"><img src="assets/icon.png" width="160" alt="Icelos"></p>
+
+<h1 align="center">Icelos</h1>
 
 A free, open source video converter for Mac.
 
