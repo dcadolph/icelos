@@ -1,0 +1,1 @@
+-hide_banner -nostdin -loglevel error -nostats -progress pipe:1 -y -i in.mov -map 0:1 -c:a aac_at -b:a 192000 -map_metadata 0 -movflags +faststart out.m4a
