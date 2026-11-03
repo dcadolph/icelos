@@ -31,4 +31,6 @@ var (
 	ErrMissingFilter = errors.New("filter not available")
 	// ErrRange is returned when a job's time range is not a forward span.
 	ErrRange = errors.New("time range invalid")
+	// ErrCopy is returned when a target copies a stream that cannot pass through untouched.
+	ErrCopy = errors.New("stream cannot be copied")
 )

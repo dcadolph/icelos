@@ -158,6 +158,12 @@ func TestBuild(t *testing.T) { //nolint:funlen // Test function.
 			"-preset", "medium", "-vf", "scale=1080:1920", "-pix_fmt", "yuv420p", "-crf", "23",
 			"-map", "0:1", "-c:a", "aac_at", "-b:a", "128000", "-ac", "2",
 			"-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"})},
+	}, { // Test 17: Remux refuses video MP4 cannot carry before ffmpeg runs.
+		Preset: "remux", Want: ErrCopy,
+		Info: func(i probe.Info) probe.Info { i.Streams[0].Codec = "theora"; return i },
+	}, { // Test 18: Remux refuses audio MP4 cannot carry before ffmpeg runs.
+		Preset: "remux", Want: ErrCopy,
+		Info: func(i probe.Info) probe.Info { i.Streams[1].Codec = "vorbis"; return i },
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {

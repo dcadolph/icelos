@@ -91,6 +91,9 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //n
 	if job.Passthrough {
 		p.Target = passthrough(p.Target, verdict)
 	}
+	if err := forcedCopy(job.Input, p.Target, verdict); err != nil {
+		return Plan{}, err
+	}
 	done := copied(p.Target, verdict)
 	lay.Burn.Filter = shiftBurn(lay.Burn.Filter, job.Range.Start)
 
@@ -166,6 +169,18 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //n
 	second := slices.Concat(final, mapVideo, pass(2), mapAudio, audioArgs, tail)
 	plan.Passes = [][]string{first, second}
 	return plan, nil
+}
+
+// forcedCopy returns ErrCopy when target t copies a stream that verdict c rules out, so a copy
+// that cannot work is refused before ffmpeg runs.
+func forcedCopy(input string, t format.Target, c Copy) error {
+	switch {
+	case t.HasVideo() && t.Video.Codec == format.Copy && c.Video != nil && !c.Video.Copy:
+		return fmt.Errorf("%w: %s: video: %s", ErrCopy, input, c.Video.Reason)
+	case t.Audio.Codec == format.Copy && c.Audio != nil && !c.Audio.Copy:
+		return fmt.Errorf("%w: %s: audio: %s", ErrCopy, input, c.Audio.Reason)
+	}
+	return nil
 }
 
 // shiftBurn returns the subtitles filter f adjusted for an input read from start. The filter
