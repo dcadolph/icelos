@@ -36,12 +36,12 @@ func TestParse(t *testing.T) {
 		In: `{"format":{"duration":"abc"}}`, Want: ErrProbe,
 	}, { // Test 3: Missing duration and size are zero.
 		In: `{"format":{"format_name":"wav"}}`, WantInfo: Info{Format: "wav"},
-	}, { // Test 4: Sample rate and frame rates.
+	}, { // Test 4: Sample rate, frame rates, and B-frame delay.
 		In: `{"streams":[{"index":0,"codec_type":"video","avg_frame_rate":"30000/1001",` +
-			`"r_frame_rate":"30000/1001"},{"index":1,"codec_type":"audio","sample_rate":"44100",` +
-			`"avg_frame_rate":"0/0","r_frame_rate":"0/0"}]}`,
+			`"r_frame_rate":"30000/1001","has_b_frames":2},{"index":1,"codec_type":"audio",` +
+			`"sample_rate":"44100","avg_frame_rate":"0/0","r_frame_rate":"0/0"}]}`,
 		WantInfo: Info{Streams: []Stream{
-			{Index: 0, Kind: "video", AvgFrameRate: "30000/1001", BaseFrameRate: "30000/1001"},
+			{Index: 0, Kind: "video", AvgFrameRate: "30000/1001", BaseFrameRate: "30000/1001", BFrames: 2},
 			{Index: 1, Kind: "audio", SampleRate: 44100, AvgFrameRate: "0/0", BaseFrameRate: "0/0"},
 		}},
 	}, { // Test 5: A sample rate that is not a number.

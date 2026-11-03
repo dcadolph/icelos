@@ -131,6 +131,14 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //n
 	switch {
 	case !p.HasVideo():
 		return Plan{Passes: [][]string{slices.Concat(final, mapAudio, audioArgs, tail)}, Copied: done}, nil
+	case p.Video.Codec == format.Copy && packedBFrames(info.Format, video):
+		raw := passlog + ".m4v"
+		unpack := slices.Concat(head, mapVideo,
+			[]string{"-c:v", "copy", "-bsf:v", "mpeg4_unpack_bframes", "-f", "m4v", raw})
+		rawVideo := []string{"-framerate", sourceRate(video), "-i", raw}
+		mapRaw := []string{"-map", strconv.Itoa(1+len(lay.Inputs)) + ":0", "-c:v", "copy"}
+		remux := slices.Concat(final, rawVideo, mapRaw, mapAudio, audioArgs, tail)
+		return Plan{Passes: [][]string{unpack, remux}, Copied: done}, nil
 	case p.Video.Codec == format.Copy:
 		vargs := []string{"-c:v", "copy"}
 		if box.Flags.HVC1Tag && video.Codec == "hevc" {
@@ -169,6 +177,23 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //n
 	second := slices.Concat(final, mapVideo, pass(2), mapAudio, audioArgs, tail)
 	plan.Passes = [][]string{first, second}
 	return plan, nil
+}
+
+// packedBFrames reports whether src is MPEG-4 Part 2 video with B-frames in an AVI file. AVI
+// carries no presentation times, so a plain copy stamps reordered frames in decode order. Copying
+// such a stream out to a raw elementary stream first lets ffmpeg's parser rebuild the times.
+func packedBFrames(formats string, src probe.Stream) bool {
+	return src.Codec == "mpeg4" && src.BFrames > 0 &&
+		slices.Contains(strings.Split(formats, ","), "avi")
+}
+
+// sourceRate returns the frame rate of video stream src as an ffmpeg rate, preferring the base
+// rate AVI stores for every frame.
+func sourceRate(src probe.Stream) string {
+	if src.BaseFrameRate != "" && src.BaseFrameRate != "0/0" {
+		return src.BaseFrameRate
+	}
+	return rateArg(src.FrameRate())
 }
 
 // forcedCopy returns ErrCopy when target t copies a stream that verdict c rules out, so a copy

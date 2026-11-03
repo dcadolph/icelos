@@ -33,6 +33,8 @@ type Stream struct {
 	AvgFrameRate string `json:"avg_frame_rate,omitempty"`
 	// BaseFrameRate is the lowest frame rate that represents every timestamp, as a fraction.
 	BaseFrameRate string `json:"r_frame_rate,omitempty"`
+	// BFrames is how many frames the decoder holds back to reorder B-frames, zero without them.
+	BFrames int `json:"has_b_frames,omitempty"`
 	// Disposition carries the stream role flags.
 	Disposition Disposition `json:"disposition"`
 	// Tags carries the stream's language and title.

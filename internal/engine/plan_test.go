@@ -164,6 +164,40 @@ func TestBuild(t *testing.T) { //nolint:funlen // Test function.
 	}, { // Test 18: Remux refuses audio MP4 cannot carry before ffmpeg runs.
 		Preset: "remux", Want: ErrCopy,
 		Info: func(i probe.Info) probe.Info { i.Streams[1].Codec = "vorbis"; return i },
+	}, { // Test 19: Remux of AVI MPEG-4 with B-frames copies through a raw stream to rebuild times.
+		Preset: "remux",
+		Info: func(i probe.Info) probe.Info {
+			i.Format = "avi"
+			i.Streams[0].Codec, i.Streams[0].BFrames, i.Streams[0].BaseFrameRate = "mpeg4", 1, "24/1"
+			return i
+		},
+		WantPasses: [][]string{
+			slices.Concat(head, []string{"-map", "0:0", "-c:v", "copy", "-bsf:v", "mpeg4_unpack_bframes",
+				"-f", "m4v", "plog.m4v"}),
+			slices.Concat(head, []string{"-framerate", "24/1", "-i", "plog.m4v", "-map", "1:0",
+				"-c:v", "copy", "-map", "0:1", "-c:a", "copy",
+				"-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"}),
+		},
+	}, { // Test 20: Remux of AVI MPEG-4 without B-frames copies in one pass.
+		Preset: "remux",
+		Info: func(i probe.Info) probe.Info {
+			i.Format = "avi"
+			i.Streams[0].Codec, i.Streams[0].BaseFrameRate = "mpeg4", "24/1"
+			return i
+		},
+		WantPasses: [][]string{slices.Concat(head, []string{"-map", "0:0", "-c:v", "copy",
+			"-map", "0:1", "-c:a", "copy",
+			"-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"})},
+	}, { // Test 21: Remux of MPEG-4 with B-frames from a container with times copies in one pass.
+		Preset: "remux",
+		Info: func(i probe.Info) probe.Info {
+			i.Format = "mov,mp4,m4a,3gp,3g2,mj2"
+			i.Streams[0].Codec, i.Streams[0].BFrames = "mpeg4", 1
+			return i
+		},
+		WantPasses: [][]string{slices.Concat(head, []string{"-map", "0:0", "-c:v", "copy",
+			"-map", "0:1", "-c:a", "copy",
+			"-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"})},
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
