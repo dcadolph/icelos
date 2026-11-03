@@ -2,76 +2,14 @@
 package preset
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
+
+	"github.com/dcadolph/icelos/internal/format"
 )
 
-// VideoCodec names the video format a preset produces.
-type VideoCodec string
-
-// Video codecs a preset can request.
-const (
-	// VideoNone drops the video stream.
-	VideoNone VideoCodec = ""
-	// VideoCopy passes the source video through untouched.
-	VideoCopy VideoCodec = "copy"
-	// VideoH264 encodes H.264.
-	VideoH264 VideoCodec = "h264"
-	// VideoHEVC encodes H.265.
-	VideoHEVC VideoCodec = "hevc"
-)
-
-// AudioCodec names the audio format a preset produces.
-type AudioCodec string
-
-// Audio codecs a preset can request.
-const (
-	// AudioNone drops the audio stream.
-	AudioNone AudioCodec = ""
-	// AudioCopy passes the source audio through untouched.
-	AudioCopy AudioCodec = "copy"
-	// AudioAAC encodes AAC.
-	AudioAAC AudioCodec = "aac"
-	// AudioMP3 encodes MP3.
-	AudioMP3 AudioCodec = "mp3"
-)
-
-// Quality is a codec-neutral quality level that each encoder maps to its own scale.
-type Quality int
-
-// Quality levels from largest file to smallest.
-const (
-	// QualityHigh keeps nearly all visible detail.
-	QualityHigh Quality = iota + 1
-	// QualityBalanced trades a little detail for a much smaller file.
-	QualityBalanced
-	// QualitySmall favors file size over detail.
-	QualitySmall
-)
-
-// Video describes the video half of a preset.
-type Video struct {
-	// Codec is the output video codec, or VideoNone for audio-only output.
-	Codec VideoCodec `json:"codec"`
-	// MaxWidth caps the long side in pixels, so portrait video gets the same box. Zero is unbounded.
-	MaxWidth int `json:"maxWidth,omitempty"`
-	// MaxHeight caps the short side in pixels. Zero is unbounded.
-	MaxHeight int `json:"maxHeight,omitempty"`
-	// Quality is the target quality level for constant-quality encodes.
-	Quality Quality `json:"quality,omitempty"`
-}
-
-// Audio describes the audio half of a preset.
-type Audio struct {
-	// Codec is the output audio codec, or AudioNone for silent output.
-	Codec AudioCodec `json:"codec"`
-	// Bitrate is the audio bitrate in bits per second.
-	Bitrate int `json:"bitrate,omitempty"`
-	// Channels caps the channel count. Zero keeps the source layout.
-	Channels int `json:"channels,omitempty"`
-}
-
-// Preset is one named conversion target.
+// Preset is one named conversion target: a point in the format catalog with a name.
 type Preset struct {
 	// ID is the stable identifier used on the command line and in the protocol.
 	ID string `json:"id"`
@@ -79,49 +17,48 @@ type Preset struct {
 	Name string `json:"name"`
 	// Description says who the preset is for.
 	Description string `json:"description"`
-	// Ext is the output file extension without the dot.
-	Ext string `json:"ext"`
-	// Video is the video settings.
-	Video Video `json:"video"`
-	// Audio is the audio settings.
-	Audio Audio `json:"audio"`
-	// TargetBytes is the desired output size. Nonzero switches to two-pass bitrate mode.
-	TargetBytes int64 `json:"targetBytes,omitempty"`
+	// Target is the container and the stream settings, flattened into the preset's JSON.
+	format.Target
 }
 
-// HasVideo reports whether the preset produces a video stream.
-func (p Preset) HasVideo() bool {
-	return p.Video.Codec != VideoNone
+// MarshalJSON encodes p with its derived file extension, so clients can show it without the
+// catalog.
+func (p Preset) MarshalJSON() ([]byte, error) {
+	type plain Preset
+	return json.Marshal(struct {
+		plain
+		Ext string `json:"ext"`
+	}{plain(p), p.Ext()})
 }
 
-// HasAudio reports whether the preset produces an audio stream.
-func (p Preset) HasAudio() bool {
-	return p.Audio.Codec != AudioNone
-}
-
-// WithTargetSize returns a copy of p that aims for an output of n bytes.
+// WithTargetSize returns a copy of p that aims for an output of n bytes with a two-pass encode.
 func (p Preset) WithTargetSize(n int64) Preset {
 	p.TargetBytes = n
+	if n > 0 && p.Video.Codec != "" && p.Video.Codec != format.Copy {
+		p.Video.RateControl = format.RateTwoPass
+		p.Video.Bitrate = 0
+	}
 	return p
 }
 
-// Validate reports whether p is internally consistent.
+// Validate reports whether p is internally consistent and the catalog can produce it.
 func (p Preset) Validate() error {
 	switch {
 	case p.ID == "":
 		return fmt.Errorf("%w: empty id", ErrInvalid)
-	case p.Ext == "":
-		return fmt.Errorf("%w: %s: empty extension", ErrInvalid, p.ID)
 	case !p.HasVideo() && !p.HasAudio():
 		return fmt.Errorf("%w: %s: no video and no audio", ErrInvalid, p.ID)
 	case p.TargetBytes < 0:
 		return fmt.Errorf("%w: %s: negative target size", ErrInvalid, p.ID)
-	case p.TargetBytes > 0 && p.Video.Codec != VideoH264 && p.Video.Codec != VideoHEVC:
+	case p.TargetBytes > 0 && (p.Video.Codec == "" || p.Video.Codec == format.Copy):
 		return fmt.Errorf("%w: %s: target size needs an encoded video stream", ErrInvalid, p.ID)
-	case p.Video.Codec == VideoCopy && (p.Video.MaxWidth > 0 || p.Video.MaxHeight > 0):
+	case p.Video.Codec == format.Copy && (p.Video.MaxWidth > 0 || p.Video.MaxHeight > 0):
 		return fmt.Errorf("%w: %s: cannot resize copied video", ErrInvalid, p.ID)
-	case p.Audio.Codec == AudioCopy && p.Audio.Channels > 0:
+	case p.Audio.Codec == format.Copy && p.Audio.Channels > 0:
 		return fmt.Errorf("%w: %s: cannot downmix copied audio", ErrInvalid, p.ID)
+	}
+	if err := format.Check(p.Target); err != nil {
+		return fmt.Errorf("%w: %s: %w", ErrInvalid, p.ID, err)
 	}
 	return nil
 }
@@ -132,50 +69,61 @@ const TargetSizeID = "target-size"
 // builtin lists the presets in display order.
 var builtin = []Preset{ //nolint:gochecknoglobals // Read-only table, copied on every access.
 	{
-		ID: "apple", Name: "Apple devices", Ext: "mp4",
+		ID: "apple", Name: "Apple devices",
 		Description: "HEVC that plays on any recent iPhone, iPad, Mac, or Apple TV at half the size of H.264.",
-		Video:       Video{Codec: VideoHEVC, MaxWidth: 3840, MaxHeight: 2160, Quality: QualityHigh},
-		Audio:       Audio{Codec: AudioAAC, Bitrate: 192_000},
+		Target: format.Target{Container: "mp4",
+			Video: format.Video{Codec: "hevc", MaxWidth: 3840, MaxHeight: 2160,
+				RateControl: format.RateQuality, Quality: format.QualityHigh},
+			Audio: format.Audio{Codec: "aac", Bitrate: 192_000}},
 	},
 	{
-		ID: "compatible", Name: "Plays anywhere", Ext: "mp4",
+		ID: "compatible", Name: "Plays anywhere",
 		Description: "H.264 at up to 1080p for older devices, TVs, and anything else.",
-		Video:       Video{Codec: VideoH264, MaxWidth: 1920, MaxHeight: 1080, Quality: QualityHigh},
-		Audio:       Audio{Codec: AudioAAC, Bitrate: 160_000, Channels: 2},
+		Target: format.Target{Container: "mp4",
+			Video: format.Video{Codec: "h264", MaxWidth: 1920, MaxHeight: 1080,
+				RateControl: format.RateQuality, Quality: format.QualityHigh},
+			Audio: format.Audio{Codec: "aac", Bitrate: 160_000, Channels: 2}},
 	},
 	{
-		ID: "web", Name: "Web and sharing", Ext: "mp4",
+		ID: "web", Name: "Web and sharing",
 		Description: "H.264 at up to 1080p that starts playing before it finishes downloading.",
-		Video:       Video{Codec: VideoH264, MaxWidth: 1920, MaxHeight: 1080, Quality: QualityBalanced},
-		Audio:       Audio{Codec: AudioAAC, Bitrate: 128_000, Channels: 2},
+		Target: format.Target{Container: "mp4",
+			Video: format.Video{Codec: "h264", MaxWidth: 1920, MaxHeight: 1080,
+				RateControl: format.RateQuality, Quality: format.QualityBalanced},
+			Audio: format.Audio{Codec: "aac", Bitrate: 128_000, Channels: 2}},
 	},
 	{
-		ID: "tiny", Name: "Tiny file", Ext: "mp4",
+		ID: "tiny", Name: "Tiny file",
 		Description: "HEVC at up to 720p for email and chat when size matters most.",
-		Video:       Video{Codec: VideoHEVC, MaxWidth: 1280, MaxHeight: 720, Quality: QualitySmall},
-		Audio:       Audio{Codec: AudioAAC, Bitrate: 96_000, Channels: 2},
+		Target: format.Target{Container: "mp4",
+			Video: format.Video{Codec: "hevc", MaxWidth: 1280, MaxHeight: 720,
+				RateControl: format.RateQuality, Quality: format.QualitySmall},
+			Audio: format.Audio{Codec: "aac", Bitrate: 96_000, Channels: 2}},
 	},
 	{
-		ID: TargetSizeID, Name: "Fit a size", Ext: "mp4",
+		ID: TargetSizeID, Name: "Fit a size",
 		Description: "H.264 at up to 1080p, sized to land just under the limit you set.",
-		Video:       Video{Codec: VideoH264, MaxWidth: 1920, MaxHeight: 1080},
-		Audio:       Audio{Codec: AudioAAC, Bitrate: 128_000, Channels: 2},
+		Target: format.Target{Container: "mp4",
+			Video: format.Video{Codec: "h264", MaxWidth: 1920, MaxHeight: 1080,
+				RateControl: format.RateTwoPass},
+			Audio: format.Audio{Codec: "aac", Bitrate: 128_000, Channels: 2}},
 	},
 	{
-		ID: "remux", Name: "Change container", Ext: "mp4",
+		ID: "remux", Name: "Change container",
 		Description: "Moves the streams into MP4 without re-encoding. Fast and lossless.",
-		Video:       Video{Codec: VideoCopy},
-		Audio:       Audio{Codec: AudioCopy},
+		Target: format.Target{Container: "mp4",
+			Video: format.Video{Codec: format.Copy}, Audio: format.Audio{Codec: format.Copy}},
 	},
 	{
-		ID: "audio", Name: "Audio only", Ext: "m4a",
+		ID: "audio", Name: "Audio only",
 		Description: "AAC audio for Music, podcasts, and voice memos.",
-		Audio:       Audio{Codec: AudioAAC, Bitrate: 192_000},
+		Target:      format.Target{Container: "m4a", Audio: format.Audio{Codec: "aac", Bitrate: 192_000}},
 	},
 	{
-		ID: "mp3", Name: "MP3", Ext: "mp3",
+		ID: "mp3", Name: "MP3",
 		Description: "MP3 audio for players and apps that want nothing else.",
-		Audio:       Audio{Codec: AudioMP3, Bitrate: 192_000, Channels: 2},
+		Target: format.Target{Container: "mp3",
+			Audio: format.Audio{Codec: "mp3", Bitrate: 192_000, Channels: 2}},
 	},
 }
 

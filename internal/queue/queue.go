@@ -123,7 +123,7 @@ func (q *Queue) Add(job engine.Job, outDir string) (Status, error) {
 
 	q.mu.Lock()
 	if job.Output == "" {
-		job.Output, err = engine.OutputPath(job.Input, job.Preset.Ext, outDir,
+		job.Output, err = engine.OutputPath(job.Input, job.Preset.Ext(), outDir,
 			func(p string) bool { return q.reserved[p] })
 	} else {
 		job.Output, err = filepath.Abs(job.Output)

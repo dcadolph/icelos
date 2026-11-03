@@ -23,6 +23,18 @@ var ( //nolint:gochecknoglobals // Read-only catalog data.
 	pcmBE    = []string{"pcm_s16be", "pcm_s24be"}
 )
 
+// dvdModes are the MPEG-2 frame sizes the DVD-Video spec allows, NTSC at 29.97 fps and PAL at 25.
+var dvdModes = []Mode{ //nolint:gochecknoglobals // Read-only catalog data.
+	{Name: "NTSC", Width: 720, Height: 480, FPS: 29.97},
+	{Name: "NTSC 704", Width: 704, Height: 480, FPS: 29.97},
+	{Name: "NTSC half D1", Width: 352, Height: 480, FPS: 29.97},
+	{Name: "NTSC SIF", Width: 352, Height: 240, FPS: 29.97},
+	{Name: "PAL", Width: 720, Height: 576, FPS: 25},
+	{Name: "PAL 704", Width: 704, Height: 576, FPS: 25},
+	{Name: "PAL half D1", Width: 352, Height: 576, FPS: 25},
+	{Name: "PAL CIF", Width: 352, Height: 288, FPS: 25},
+}
+
 // containers is the catalog of output containers, video first, then audio-only.
 var containers = []Container{ //nolint:gochecknoglobals // Read-only catalog data.
 	{ID: "mp4", Name: "MP4", Ext: "mp4", Muxer: "mp4", Kind: KindVideo,
@@ -52,7 +64,7 @@ var containers = []Container{ //nolint:gochecknoglobals // Read-only catalog dat
 	{ID: "mpg", Name: "MPG", Ext: "mpg", Muxer: "mpeg", Kind: KindVideo,
 		Video: []string{"mpeg2video", "mpeg1video"}, Audio: []string{"mp2", "mp3", "ac3"}},
 	{ID: "vob", Name: "VOB", Ext: "vob", Muxer: "vob", Kind: KindVideo,
-		Video: []string{"mpeg2video"}, Audio: []string{"ac3", "mp2"}},
+		Video: []string{"mpeg2video"}, Audio: []string{"ac3", "mp2"}, Modes: dvdModes},
 	{ID: "ts", Name: "TS", Ext: "ts", Muxer: "mpegts", Kind: KindVideo,
 		Video: tsVideo, Audio: tsAudio},
 	{ID: "trp", Name: "TRP", Ext: "trp", Muxer: "mpegts", Kind: KindVideo,

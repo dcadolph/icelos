@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/dcadolph/icelos/internal/format"
 	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/probe"
 )
@@ -30,11 +31,12 @@ type codecEncoders struct {
 	Hardware string
 }
 
-// Encoder tables. Quality values are indexed by preset.Quality minus one.
+// Encoder tables keyed by catalog codec ID. Quality values are indexed by format.Quality
+// minus one.
 var (
-	videoEncoders = map[preset.VideoCodec]codecEncoders{ //nolint:gochecknoglobals // Read-only table.
-		preset.VideoH264: {Software: "libx264", Hardware: "h264_videotoolbox"},
-		preset.VideoHEVC: {Software: "libx265", Hardware: "hevc_videotoolbox"},
+	videoEncoders = map[string]codecEncoders{ //nolint:gochecknoglobals // Read-only table.
+		"h264": {Software: "libx264", Hardware: "h264_videotoolbox"},
+		"hevc": {Software: "libx265", Hardware: "hevc_videotoolbox"},
 	}
 	qualityScale = map[string][3]int{ //nolint:gochecknoglobals // Read-only table.
 		"libx264":           {20, 23, 27},
@@ -103,7 +105,7 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string) (Pl
 		}
 	}
 	tail := []string{"-map_metadata", "0"}
-	if slices.Contains(movFamily, p.Ext) {
+	if slices.Contains(movFamily, p.Ext()) {
 		tail = append(tail, "-movflags", "+faststart")
 	}
 	tail = append(tail, dest)
@@ -111,9 +113,9 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string) (Pl
 	if !p.HasVideo() {
 		return Plan{Passes: [][]string{slices.Concat(head, mapAudio, audioArgs, tail)}}, nil
 	}
-	if p.Video.Codec == preset.VideoCopy {
+	if p.Video.Codec == format.Copy {
 		vargs := []string{"-c:v", "copy"}
-		if video.Codec == "hevc" && slices.Contains(movFamily, p.Ext) {
+		if video.Codec == "hevc" && slices.Contains(movFamily, p.Ext()) {
 			vargs = append(vargs, "-tag:v", "hvc1")
 		}
 		return Plan{Passes: [][]string{slices.Concat(head, mapVideo, vargs, mapAudio, audioArgs, tail)}}, nil
@@ -136,7 +138,7 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string) (Pl
 		vargs = append(vargs, "-vf", fmt.Sprintf("scale=%d:%d", nw, nh))
 	}
 	vargs = append(vargs, "-pix_fmt", "yuv420p")
-	if p.Video.Codec == preset.VideoHEVC && slices.Contains(movFamily, p.Ext) {
+	if p.Video.Codec == "hevc" && slices.Contains(movFamily, p.Ext()) {
 		vargs = append(vargs, "-tag:v", "hvc1")
 	}
 	plan := Plan{Encoder: enc, Hardware: hw}
@@ -177,18 +179,18 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string) (Pl
 }
 
 // audioCodecArgs returns the ffmpeg audio codec arguments for a and the source stream src.
-func audioCodecArgs(a preset.Audio, src probe.Stream, avail EncoderSet) ([]string, error) {
+func audioCodecArgs(a format.Audio, src probe.Stream, avail EncoderSet) ([]string, error) {
 	var args []string
 	switch a.Codec {
-	case preset.AudioCopy:
+	case format.Copy:
 		return []string{"-c:a", "copy"}, nil
-	case preset.AudioAAC:
+	case "aac":
 		name := "aac"
 		if avail.Has("aac_at") {
 			name = "aac_at"
 		}
 		args = []string{"-c:a", name}
-	case preset.AudioMP3:
+	case "mp3":
 		if !avail.Has("libmp3lame") {
 			return nil, fmt.Errorf("%w: libmp3lame", ErrMissingEncoder)
 		}
@@ -206,11 +208,11 @@ func audioCodecArgs(a preset.Audio, src probe.Stream, avail EncoderSet) ([]strin
 }
 
 // qualityIndex maps q to a quality table index, treating unset as balanced.
-func qualityIndex(q preset.Quality) int {
-	if q < preset.QualityHigh || q > preset.QualitySmall {
-		q = preset.QualityBalanced
+func qualityIndex(q format.Quality) int {
+	if q < format.QualityHigh || q > format.QualitySmall {
+		q = format.QualityBalanced
 	}
-	return int(q - preset.QualityHigh)
+	return int(q - format.QualityHigh)
 }
 
 // fit returns the even frame size that fits w by h inside the box, and whether it differs

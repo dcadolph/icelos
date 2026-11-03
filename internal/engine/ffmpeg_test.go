@@ -151,7 +151,7 @@ func TestFFmpegEncode(t *testing.T) { //nolint:funlen // Test function.
 			if !test.WantOutput && !test.PreExisting && readErr == nil {
 				t.Errorf("unexpected output file")
 			}
-			if _, err := os.Stat(partialPath(out, p.Ext)); !os.IsNotExist(err) {
+			if _, err := os.Stat(partialPath(out, p.Ext())); !os.IsNotExist(err) {
 				t.Errorf("partial file left behind: %v", err)
 			}
 			var last Progress
@@ -328,7 +328,7 @@ func TestRealFFmpeg(t *testing.T) {
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
 			p := testPreset(t, test.Preset)
-			out, err := OutputPath(src, p.Ext, "", nil)
+			out, err := OutputPath(src, p.Ext(), "", nil)
 			if err != nil {
 				t.Fatal(err)
 			}

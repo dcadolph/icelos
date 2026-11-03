@@ -159,6 +159,9 @@ type Container struct {
 	Subtitles []string `json:"subtitles,omitempty"`
 	// SampleRates lists the only audio sample rates the muxer accepts, empty when the codec decides.
 	SampleRates []int `json:"sampleRates,omitempty"`
+	// Modes lists the only frame shapes the container's players accept, such as the DVD sizes in
+	// VOB, empty when the codec decides.
+	Modes []Mode `json:"modes,omitempty"`
 	// Flags are the muxer settings the container always needs.
 	Flags Flags `json:"flags"`
 }
@@ -182,7 +185,17 @@ func (c Container) clone() Container {
 	c.Audio = slices.Clone(c.Audio)
 	c.Subtitles = slices.Clone(c.Subtitles)
 	c.SampleRates = slices.Clone(c.SampleRates)
+	c.Modes = cloneModes(c.Modes)
 	return c
+}
+
+// cloneModes returns a copy of modes that shares no slices with the catalog.
+func cloneModes(modes []Mode) []Mode {
+	out := slices.Clone(modes)
+	for i := range out {
+		out[i].Bitrates = slices.Clone(out[i].Bitrates)
+	}
+	return out
 }
 
 // clone returns a copy of c that shares no slices with the catalog.
@@ -192,10 +205,7 @@ func (c Codec) clone() Codec {
 	c.Profiles = slices.Clone(c.Profiles)
 	c.Levels = slices.Clone(c.Levels)
 	c.Tags = slices.Clone(c.Tags)
-	c.Modes = slices.Clone(c.Modes)
-	for i := range c.Modes {
-		c.Modes[i].Bitrates = slices.Clone(c.Modes[i].Bitrates)
-	}
+	c.Modes = cloneModes(c.Modes)
 	c.FrameRates = slices.Clone(c.FrameRates)
 	c.SampleRates = slices.Clone(c.SampleRates)
 	c.Bitrates = slices.Clone(c.Bitrates)
@@ -218,8 +228,27 @@ func (c Codec) ProfileByID(id string) (Profile, bool) {
 // width, height, frame rate, or bitrate matches any value, and the first fitting mode in table
 // order wins. A codec with no modes for the profile accepts anything and returns a zero Mode.
 func (c Codec) Match(profile string, width, height int, fps float64, bitrate int) (Mode, error) {
+	return matchMode(c.Modes, c.ID, profile, width, height, fps, bitrate)
+}
+
+// Match returns the container mode that a frame size and frame rate fit, with the same rules as
+// Codec.Match. A container with no modes accepts anything and returns a zero Mode.
+func (c Container) Match(width, height int, fps float64) (Mode, error) {
+	return matchMode(c.Modes, c.ID, "", width, height, fps, 0)
+}
+
+// Fixed reports whether the codec encodes only fixed frame shapes for the profile.
+func (c Codec) Fixed(profile string) bool {
+	return slices.ContainsFunc(c.Modes, func(m Mode) bool {
+		return m.Profile == "" || m.Profile == profile
+	})
+}
+
+// matchMode returns the first mode in modes that fits, skipping modes tied to another profile.
+// The name identifies the codec or container in the error.
+func matchMode(modes []Mode, name, profile string, width, height int, fps float64, bitrate int) (Mode, error) {
 	fixed := false
-	for _, m := range c.Modes {
+	for _, m := range modes {
 		if m.Profile != "" && m.Profile != profile {
 			continue
 		}
@@ -235,7 +264,7 @@ func (c Codec) Match(profile string, width, height int, fps float64, bitrate int
 	if !fixed {
 		return Mode{}, nil
 	}
-	return Mode{}, fmt.Errorf("%w: %s: %dx%d at %g fps and %d b/s", ErrMode, c.ID, width, height,
+	return Mode{}, fmt.Errorf("%w: %s: %dx%d at %g fps and %d b/s", ErrMode, name, width, height,
 		fps, bitrate)
 }
 

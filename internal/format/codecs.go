@@ -99,7 +99,7 @@ var codecs = []Codec{ //nolint:gochecknoglobals // Read-only catalog data.
 			{ID: "4444", Name: "4444", PixFmt: "yuv444p10le"},
 			{ID: "4444xq", Name: "4444 XQ", PixFmt: "yuv444p10le"}}},
 	{ID: "dnxhd", Name: "Avid DNxHD and DNxHR", Kind: KindVideo, Encoders: []Encoder{{Name: "dnxhd"}},
-		RateControls: []RateControl{RateCBR}, PixFmt: "yuv422p", Modes: dnxhdModes,
+		PixFmt: "yuv422p", Modes: dnxhdModes,
 		Profiles: []Profile{{ID: "dnxhd", Name: "DNxHD"}, {ID: "dnxhr_lb", Name: "DNxHR LB"},
 			{ID: "dnxhr_sq", Name: "DNxHR SQ"}, {ID: "dnxhr_hq", Name: "DNxHR HQ"},
 			{ID: "dnxhr_hqx", Name: "DNxHR HQX", PixFmt: "yuv422p10le"},

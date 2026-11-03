@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/dcadolph/icelos/internal/format"
 	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/probe"
 )
@@ -253,12 +254,12 @@ func TestFit(t *testing.T) {
 func TestQualityIndex(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		In        preset.Quality
+		In        format.Quality
 		WantIndex int
 	}{{ // Test 0: High.
-		In: preset.QualityHigh, WantIndex: 0,
+		In: format.QualityHigh, WantIndex: 0,
 	}, { // Test 1: Small.
-		In: preset.QualitySmall, WantIndex: 2,
+		In: format.QualitySmall, WantIndex: 2,
 	}, { // Test 2: Unset is balanced.
 		In: 0, WantIndex: 1,
 	}, { // Test 3: Out of range is balanced.
@@ -276,7 +277,7 @@ func TestQualityIndex(t *testing.T) {
 
 func TestAudioCodecArgsInvalid(t *testing.T) {
 	t.Parallel()
-	_, err := audioCodecArgs(preset.Audio{Codec: "vorbis"}, probe.Stream{}, testAvail())
+	_, err := audioCodecArgs(format.Audio{Codec: "vorbis"}, probe.Stream{}, testAvail())
 	if !errors.Is(err, preset.ErrInvalid) {
 		t.Errorf("error = %v, want %v", err, preset.ErrInvalid)
 	}

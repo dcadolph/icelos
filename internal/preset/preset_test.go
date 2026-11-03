@@ -1,11 +1,14 @@
 package preset
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/dcadolph/icelos/internal/format"
 )
 
 func TestBuiltinValid(t *testing.T) {
@@ -69,7 +72,9 @@ func TestLookup(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	t.Parallel()
-	base := Preset{ID: "x", Ext: "mp4", Video: Video{Codec: VideoH264}, Audio: Audio{Codec: AudioAAC}}
+	base := Preset{ID: "x", Target: format.Target{Container: "mp4",
+		Video: format.Video{Codec: "h264", RateControl: format.RateQuality, Quality: format.QualityHigh},
+		Audio: format.Audio{Codec: "aac"}}}
 	tests := []struct {
 		Want error
 		In   func(Preset) Preset
@@ -77,22 +82,36 @@ func TestValidate(t *testing.T) {
 		In: func(p Preset) Preset { return p },
 	}, { // Test 1: Empty id.
 		In: func(p Preset) Preset { p.ID = ""; return p }, Want: ErrInvalid,
-	}, { // Test 2: Empty extension.
-		In: func(p Preset) Preset { p.Ext = ""; return p }, Want: ErrInvalid,
+	}, { // Test 2: Unknown container.
+		In: func(p Preset) Preset { p.Container = ""; return p }, Want: format.ErrUnknownContainer,
 	}, { // Test 3: No streams at all.
-		In: func(p Preset) Preset { p.Video.Codec, p.Audio.Codec = VideoNone, AudioNone; return p }, Want: ErrInvalid,
+		In: func(p Preset) Preset { p.Video.Codec, p.Audio.Codec = "", ""; return p }, Want: ErrInvalid,
 	}, { // Test 4: Negative target size.
 		In: func(p Preset) Preset { return p.WithTargetSize(-1) }, Want: ErrInvalid,
 	}, { // Test 5: Target size with copied video.
-		In: func(p Preset) Preset { p.Video.Codec = VideoCopy; return p.WithTargetSize(1) }, Want: ErrInvalid,
+		In: func(p Preset) Preset {
+			p.Video = format.Video{Codec: format.Copy}
+			return p.WithTargetSize(1)
+		},
+		Want: ErrInvalid,
 	}, { // Test 6: Target size on audio-only output.
-		In: func(p Preset) Preset { p.Video.Codec = VideoNone; return p.WithTargetSize(1) }, Want: ErrInvalid,
+		In:   func(p Preset) Preset { p.Video = format.Video{}; return p.WithTargetSize(1) },
+		Want: ErrInvalid,
 	}, { // Test 7: Resize with copied video.
-		In: func(p Preset) Preset { p.Video = Video{Codec: VideoCopy, MaxWidth: 640}; return p }, Want: ErrInvalid,
+		In: func(p Preset) Preset {
+			p.Video = format.Video{Codec: format.Copy, MaxWidth: 640}
+			return p
+		},
+		Want: ErrInvalid,
 	}, { // Test 8: Downmix with copied audio.
-		In: func(p Preset) Preset { p.Audio = Audio{Codec: AudioCopy, Channels: 2}; return p }, Want: ErrInvalid,
+		In:   func(p Preset) Preset { p.Audio = format.Audio{Codec: format.Copy, Channels: 2}; return p },
+		Want: ErrInvalid,
 	}, { // Test 9: Target size with HEVC is valid.
-		In: func(p Preset) Preset { p.Video.Codec = VideoHEVC; return p.WithTargetSize(1) },
+		In: func(p Preset) Preset { p.Video.Codec = "hevc"; return p.WithTargetSize(1) },
+	}, { // Test 10: Catalog refusals are invalid presets too.
+		In: func(p Preset) Preset { p.Video.Width = 1919; return p }, Want: ErrInvalid,
+	}, { // Test 11: Catalog refusals keep their own error.
+		In: func(p Preset) Preset { p.Video.Width = 1919; return p }, Want: format.ErrSetting,
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
@@ -101,6 +120,80 @@ func TestValidate(t *testing.T) {
 				t.Errorf("error = %v, want %v", err, test.Want)
 			}
 		})
+	}
+}
+
+func TestWithTargetSize(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		WantRate format.RateControl
+		ID       string
+		In       int64
+	}{{ // Test 0: A quality preset switches to two-pass.
+		ID: "web", In: 8_000_000, WantRate: format.RateTwoPass,
+	}, { // Test 1: Zero leaves the rate control alone.
+		ID: "web", In: 0, WantRate: format.RateQuality,
+	}, { // Test 2: Copied video is left for Validate to refuse.
+		ID: "remux", In: 8_000_000, WantRate: "",
+	}, { // Test 3: Audio-only output gains no video rate control.
+		ID: "audio", In: 8_000_000, WantRate: "",
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			p, err := Lookup(test.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := p.WithTargetSize(test.In)
+			if diff := cmp.Diff(test.WantRate, got.Video.RateControl); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(test.In, got.TargetBytes); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestExt(t *testing.T) {
+	t.Parallel()
+	want := map[string]string{"apple": "mp4", "compatible": "mp4", "web": "mp4", "tiny": "mp4",
+		TargetSizeID: "mp4", "remux": "mp4", "audio": "m4a", "mp3": "mp3"}
+	got := map[string]string{}
+	for _, p := range All() {
+		got[p.ID] = p.Ext()
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestJSON(t *testing.T) {
+	t.Parallel()
+	p, err := Lookup("web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(b, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"id", "name", "description", "container", "ext", "video", "audio"} {
+		if _, ok := fields[key]; !ok {
+			t.Errorf("JSON lacks %q: %s", key, b)
+		}
+	}
+	var back Preset
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(p, back); diff != "" {
+		t.Errorf("round trip mismatch (-want +got):\n%s", diff)
 	}
 }
 

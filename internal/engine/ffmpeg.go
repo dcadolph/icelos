@@ -114,7 +114,7 @@ func (f *FFmpeg) Encode(ctx context.Context, job Job, report ReportFunc) error {
 		return fmt.Errorf("%w: temp dir: %w", ErrOutput, err)
 	}
 	defer func() { _ = os.RemoveAll(work) }()
-	partial := partialPath(out, job.Preset.Ext)
+	partial := partialPath(out, job.Preset.Ext())
 	defer func() { _ = os.Remove(partial) }()
 
 	plan, err := Build(job, info, avail, partial, filepath.Join(work, "pass"))

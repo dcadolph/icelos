@@ -54,8 +54,8 @@ func TestGolden(t *testing.T) {
 			if p.ID == preset.TargetSizeID {
 				p = p.WithTargetSize(50_000_000)
 			}
-			job := Job{Input: "in.mov", Output: "out." + p.Ext, Preset: p, Hardware: test.Hardware}
-			plan, err := Build(job, goldenInfo(), testAvail(), "out."+p.Ext, "passlog")
+			job := Job{Input: "in.mov", Output: "out." + p.Ext(), Preset: p, Hardware: test.Hardware}
+			plan, err := Build(job, goldenInfo(), testAvail(), "out."+p.Ext(), "passlog")
 			if err != nil {
 				t.Fatalf("build: %v", err)
 			}
