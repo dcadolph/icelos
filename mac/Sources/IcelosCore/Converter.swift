@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Observation
 
@@ -101,6 +102,8 @@ public final class Converter {
     public var targetSize = "25MB"
     /// outputFolder is where outputs go, or nil for next to each source.
     public var outputFolder: URL?
+    /// thumbnails holds the row frame for each source with motion video, once it is made.
+    public private(set) var thumbnails: [URL: CGImage] = [:]
 
     /// send delivers a request to the backend.
     @ObservationIgnored private let send: (Request) -> Void
@@ -110,12 +113,18 @@ public final class Converter {
     @ObservationIgnored private var early: [String: JobStatus] = [:]
     /// fileSize reads a file size, injectable for tests.
     @ObservationIgnored private let fileSize: (URL) -> Int64?
+    /// thumbnail makes a row frame for a source, injectable for tests.
+    @ObservationIgnored private let thumbnail: @Sendable (URL) async -> CGImage?
+    /// thumbnailTasks are the frames asked for, one per source, kept so none is asked twice.
+    @ObservationIgnored var thumbnailTasks: [URL: Task<Void, Never>] = [:]
 
     /// Creates a converter that sends requests through send.
     public init(send: @escaping (Request) -> Void,
-                fileSize: @escaping (URL) -> Int64? = Converter.diskSize) {
+                fileSize: @escaping (URL) -> Int64? = Converter.diskSize,
+                thumbnail: @escaping @Sendable (URL) async -> CGImage? = { await Thumbnails.image(for: $0) }) {
         self.send = send
         self.fileSize = fileSize
+        self.thumbnail = thumbnail
     }
 
     /// diskSize returns the size of the file at url.
@@ -349,6 +358,7 @@ public final class Converter {
     public func remove(_ id: UUID) {
         items.removeAll { $0.id == id && !($0.phase == .queued || $0.phase == .running) }
         clearStaleSelection()
+        pruneThumbnails()
     }
 
     /// canRemoveSelection is true when a file is selected and not queued or running.
@@ -362,11 +372,45 @@ public final class Converter {
         if let id = selection { remove(id) }
     }
 
+    /// row is the display model of the file with id, or nil when it is gone.
+    public func row(_ id: UUID) -> RowModel? {
+        guard let item = items.first(where: { $0.id == id }) else { return nil }
+        return RowModel(item: item, windowSettings: settings, catalog: catalog, targetSize: targetSize)
+    }
+
     /// clearFinished drops finished items here and in the converter.
     public func clearFinished() {
         items.removeAll { $0.phase.isFinished }
         clearStaleSelection()
+        pruneThumbnails()
         send(Request(id: "clear", op: "clear"))
+    }
+
+    /// requestThumbnail makes the row frame for url once, off the main actor.
+    private func requestThumbnail(_ url: URL) {
+        guard thumbnailTasks[url] == nil else { return }
+        let make = thumbnail
+        thumbnailTasks[url] = Task { [weak self] in
+            let image = await make(url)
+            self?.storeThumbnail(image, for: url)
+        }
+    }
+
+    /// storeThumbnail records a finished frame for a source still in the list. It is a plain
+    /// method so the dictionary write runs outside the async closure.
+    private func storeThumbnail(_ image: CGImage?, for url: URL) {
+        guard let image, thumbnailTasks[url] != nil else { return }
+        thumbnails[url] = image
+    }
+
+    /// pruneThumbnails drops frames for sources no longer in the list.
+    private func pruneThumbnails() {
+        let urls = Set(items.map(\.url))
+        for url in thumbnailTasks.keys where !urls.contains(url) {
+            thumbnailTasks[url]?.cancel()
+            thumbnailTasks[url] = nil
+            thumbnails[url] = nil
+        }
     }
 
     /// clearStaleSelection drops a selection whose file is gone.
@@ -402,6 +446,9 @@ public final class Converter {
             if !hasHardware { hardware = false }
         case "probe":
             update(itemID) { $0.info = m.info }
+            if let id = itemID, let item = items.first(where: { $0.id == id }), m.info?.video != nil {
+                requestThumbnail(item.url)
+            }
         case "add":
             guard let status = m.status else { return }
             update(itemID) { $0.jobID = status.id }

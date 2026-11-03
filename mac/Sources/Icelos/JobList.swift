@@ -49,7 +49,7 @@ struct JobList: View {
     }
 }
 
-/// JobRow is one file with its progress and actions.
+/// JobRow draws one file from its row model: thumbnail, name, source, target, and state.
 struct JobRow: View {
     /// item is the file shown.
     let item: Item
@@ -59,148 +59,97 @@ struct JobRow: View {
     let selected: Bool
     /// editSettings gives one file its own settings in the inspector.
     let editSettings: (UUID) -> Void
+    /// reduceMotion turns off the row animations.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        let row = RowModel(item: item, windowSettings: model.settings, catalog: model.catalog,
+                           targetSize: model.targetSize)
         HStack(spacing: 14) {
-            icon
-            VStack(alignment: .leading, spacing: 5) {
-                Text(item.url.lastPathComponent)
-                    .font(.callout.weight(.medium))
+            Thumbnail(image: model.thumbnails[item.url], media: row.media, tone: row.badge.tone)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(row.name)
+                    .font(.body.weight(.medium))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                detail
+                Text(row.source)
+                    .font(.callout)
+                    .foregroundStyle(ThemeColor(slot: row.sourceTone))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                target(row)
             }
             Spacer(minLength: 12)
-            actions
+            BadgeView(badge: row.badge)
+            ForEach(row.actions, id: \.self) { action in
+                iconButton(action) { perform(action) }
+            }
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.fill(selected: selected)))
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 8).fill(selected ? Theme.raised : Theme.background.opacity(0)))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? Theme.accent.opacity(0.6) : Theme.border))
         .contentShape(RoundedRectangle(cornerRadius: 8))
         .onTapGesture { model.selection = item.id }
+        .accessibilityElement(children: .contain)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
         .contextMenu { menu }
-        .animation(.easeOut(duration: 0.2), value: item.phase)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: item.phase)
     }
 
-    /// icon shows the media kind and the outcome.
-    private var icon: some View {
-        let audio = item.info.map { $0.video == nil } ?? false
-        return ZStack {
-            RoundedRectangle(cornerRadius: 9).fill(Theme.surface)
-            Image(systemName: iconName(audio: audio))
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(iconColor)
-        }
-        .frame(width: 38, height: 38)
-    }
-
-    /// iconName picks the row symbol.
-    private func iconName(audio: Bool) -> String {
-        switch item.phase {
-        case .done: "checkmark"
-        case .failed: "exclamationmark"
-        case .canceled: "xmark"
-        default: audio ? "waveform" : "film"
-        }
-    }
-
-    /// iconColor tints the row symbol.
-    private var iconColor: ThemeColor {
-        switch item.phase {
-        case .done: Theme.success
-        case .failed: Theme.danger
-        case .canceled: Theme.muted
-        default: Theme.accent
-        }
-    }
-
-    /// detail is the line under the file name.
-    @ViewBuilder private var detail: some View {
-        switch item.phase {
-        case .pending:
-            secondary(item.probeError ?? pendingText, color: item.probeError == nil ? nil : Theme.danger)
-        case .queued:
-            secondary("Waiting…")
-        case .running:
-            VStack(alignment: .leading, spacing: 5) {
-                GradientBar(value: item.status?.progress.percent ?? 0)
-                secondary(runningText)
+    /// target is the line under the source: chips and estimate before converting, the bar and
+    /// progress while running, the result or failure after.
+    @ViewBuilder private func target(_ row: RowModel) -> some View {
+        if let progress = row.progress {
+            VStack(alignment: .leading, spacing: 4) {
+                GradientBar(value: progress)
+                detail(row)
             }
-        case .done:
-            secondary(doneText, color: Theme.success)
-        case .failed:
-            secondary(item.errorMessage ?? "Failed.", color: Theme.danger)
-                .textSelection(.enabled)
-        case .canceled:
-            secondary("Canceled.")
+        } else if row.detail != nil {
+            detail(row).textSelection(.enabled)
+        } else {
+            HStack(spacing: 6) {
+                if row.ownSettings { Chip(text: "Own settings", tone: .accentText) }
+                ForEach(row.chips, id: \.self) { Chip(text: $0, tone: .text) }
+                if let estimate = row.estimate {
+                    Text(estimate)
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.muted)
+                        .lineLimit(1)
+                        .layoutPriority(-1)
+                }
+            }
         }
     }
 
-    /// pendingText describes a file waiting for Convert, with its own settings when it has them.
-    private var pendingText: String {
-        let summary = item.info.map(Format.summary) ?? "Reading…"
-        guard let s = item.settings else { return summary }
-        return "\(summary) · Own settings: \(s.ext.uppercased())"
-    }
-
-    /// runningText describes live progress.
-    private var runningText: String {
-        guard let p = item.status?.progress else { return "Starting…" }
-        var parts = ["\(Int(p.percent * 100))%"]
-        if p.passes > 1 { parts.append("pass \(p.pass) of \(p.passes)") }
-        if p.speed > 0 { parts.append(String(format: "%.1f×", p.speed)) }
-        if p.etaNs > 0 { parts.append(Format.duration(ns: p.etaNs) + " left") }
-        if let enc = Format.encoder(p) { parts.append(enc) }
-        return parts.joined(separator: " · ")
-    }
-
-    /// doneText describes the finished output.
-    private var doneText: String {
-        var parts = [item.outputURL?.lastPathComponent ?? "Done"]
-        if let out = item.outputSize {
-            parts.append(Format.bytes(out))
-            if let src = item.info?.size, let saving = Format.saving(from: src, to: out) { parts.append(saving) }
-        }
-        return parts.joined(separator: " · ")
-    }
-
-    /// secondary styles a detail line.
-    private func secondary(_ text: String, color: ThemeColor? = nil) -> some View {
-        Text(text)
+    /// detail draws the progress, result, or failure line.
+    private func detail(_ row: RowModel) -> some View {
+        Text(row.detail ?? "")
             .font(.caption)
             .monospacedDigit()
-            .foregroundStyle(color ?? Theme.muted)
+            .foregroundStyle(ThemeColor(slot: row.detailTone))
             .lineLimit(2)
     }
 
-    /// actions are the trailing buttons for the current phase.
-    @ViewBuilder private var actions: some View {
-        switch item.phase {
-        case .queued, .running:
-            iconButton("stop.circle", help: "Cancel") { model.cancel(item.id) }
-        case .done:
-            iconButton("magnifyingglass.circle", help: "Show in Finder") { reveal() }
-            iconButton("xmark.circle", help: "Remove from list") { model.remove(item.id) }
-        case .failed, .canceled:
-            if item.probeError == nil {
-                iconButton("arrow.clockwise.circle", help: "Try again") { model.retry(item.id) }
-            }
-            iconButton("xmark.circle", help: "Remove from list") { model.remove(item.id) }
-        case .pending:
-            iconButton("xmark.circle", help: "Remove from list") { model.remove(item.id) }
+    /// perform runs a trailing action.
+    private func perform(_ action: RowModel.Action) {
+        switch action {
+        case .cancel: model.cancel(item.id)
+        case .reveal: reveal()
+        case .retry: model.retry(item.id)
+        case .remove: model.remove(item.id)
         }
     }
 
     /// iconButton is a borderless symbol button.
-    private func iconButton(_ symbol: String, help: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 18))
+    private func iconButton(_ action: RowModel.Action, run: @escaping () -> Void) -> some View {
+        Button(action: run) {
+            Image(systemName: action.symbol).font(.system(size: 18))
         }
         .buttonStyle(.borderless)
         .foregroundStyle(Theme.muted)
-        .help(help)
-        .accessibilityLabel(help)
+        .help(action.label)
+        .accessibilityLabel(action.label)
     }
 
     /// menu is the row context menu.
@@ -221,5 +170,77 @@ struct JobRow: View {
     /// reveal selects the output in Finder.
     private func reveal() {
         if let url = item.outputURL { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+    }
+}
+
+/// Thumbnail is the 96 by 54 tile at the start of a row: a frame of the video, a waveform for
+/// sound, with the state color as a dot on its corner.
+struct Thumbnail: View {
+    /// image is the cached frame, if made.
+    let image: CGImage?
+    /// media picks the tile drawn without a frame.
+    let media: RowModel.Media
+    /// tone is the state color of the dot.
+    let tone: Palette.Slot
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 6).fill(Theme.surface)
+            if let image {
+                Image(decorative: image, scale: 2)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else {
+                Image(systemName: media == .audio ? "waveform" : "film")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(media == .audio ? Theme.accent : Theme.muted)
+            }
+        }
+        .frame(width: 96, height: 54)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(alignment: .bottomTrailing) {
+            Circle()
+                .fill(ThemeColor(slot: tone))
+                .frame(width: 6, height: 6)
+                .overlay(Circle().strokeBorder(Theme.background, lineWidth: 1))
+                .padding(4)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+/// BadgeView is the state label at the end of a row.
+struct BadgeView: View {
+    /// badge is the label and its color.
+    let badge: RowModel.Badge
+
+    var body: some View {
+        Text(badge.text)
+            .font(.caption.weight(.medium))
+            .monospacedDigit()
+            .foregroundStyle(ThemeColor(slot: badge.tone))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(RoundedRectangle(cornerRadius: 6).fill(ThemeColor(slot: badge.tone).opacity(0.14)))
+            .fixedSize()
+    }
+}
+
+/// Chip is one short fact about the output, e.g. "MP4" or "1920×1080".
+struct Chip: View {
+    /// text is the label.
+    let text: String
+    /// tone is the label color.
+    let tone: Palette.Slot
+
+    var body: some View {
+        Text(text)
+            .font(.caption.weight(.medium))
+            .monospacedDigit()
+            .foregroundStyle(ThemeColor(slot: tone))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .lineLimit(1)
+            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.text.opacity(0.07)))
     }
 }

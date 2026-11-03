@@ -152,12 +152,48 @@ public struct MediaStream: Codable, Hashable, Sendable {
     public var height: Int?
     /// channels is the audio channel count.
     public var channels: Int?
+    /// disposition carries the stream role flags.
+    public var disposition: Disposition?
+    /// sideData carries per-stream extras such as the display rotation.
+    public var sideData: [SideData]?
+
+    /// Disposition mirrors the ffprobe role flags.
+    public struct Disposition: Codable, Hashable, Sendable {
+        /// attachedPic is 1 when the stream is embedded cover art.
+        public var attachedPic: Int?
+
+        /// CodingKeys maps ffprobe field names.
+        enum CodingKeys: String, CodingKey {
+            case attachedPic = "attached_pic"
+        }
+    }
+
+    /// SideData mirrors one ffprobe side data entry.
+    public struct SideData: Codable, Hashable, Sendable {
+        /// rotation is the display rotation in degrees.
+        public var rotation: Int?
+    }
+
+    /// isCover is true for embedded cover art rather than motion video.
+    public var isCover: Bool { disposition?.attachedPic == 1 }
+
+    /// displaySize is the frame size as the viewer sees it, swapped for a quarter-turn rotation,
+    /// as the backend reads it.
+    public var displaySize: (width: Int, height: Int)? {
+        guard let w = width, let h = height, w > 0, h > 0 else { return nil }
+        let quarter = (sideData ?? []).contains {
+            let r = (($0.rotation ?? 0) % 360 + 360) % 360
+            return r == 90 || r == 270
+        }
+        return quarter ? (h, w) : (w, h)
+    }
 
     /// CodingKeys maps ffprobe field names.
     enum CodingKeys: String, CodingKey {
-        case index, width, height, channels
+        case index, width, height, channels, disposition
         case kind = "codec_type"
         case codec = "codec_name"
+        case sideData = "side_data_list"
     }
 }
 
@@ -172,8 +208,15 @@ public struct MediaInfo: Codable, Hashable, Sendable {
     /// streams lists every stream.
     public var streams: [MediaStream]?
 
-    /// video is the first video stream.
-    public var video: MediaStream? { streams?.first { $0.kind == "video" } }
+    /// video is the first video stream that is not cover art.
+    public var video: MediaStream? { streams?.first { $0.kind == "video" && !$0.isCover } }
+
+    /// bitrate is the overall bit rate in bits per second, or nil when the size or duration is
+    /// unknown.
+    public var bitrate: Double? {
+        guard size > 0, durationNs > 0 else { return nil }
+        return Double(size) * 8 / (Double(durationNs) / 1e9)
+    }
 
     /// audio is the first audio stream.
     public var audio: MediaStream? { streams?.first { $0.kind == "audio" } }

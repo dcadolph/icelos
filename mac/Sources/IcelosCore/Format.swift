@@ -18,7 +18,7 @@ public enum Format {
     /// summary describes a probed file, e.g. "1920×1080 · HEVC · 1:23 · 412 MB".
     public static func summary(_ info: MediaInfo) -> String {
         var parts: [String] = []
-        if let v = info.video, let w = v.width, let h = v.height, w > 0 {
+        if let v = info.video, let (w, h) = v.displaySize {
             parts.append("\(w)×\(h)")
             if let c = v.codec { parts.append(c.uppercased()) }
         } else if let a = info.audio, let c = a.codec {
