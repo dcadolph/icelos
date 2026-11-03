@@ -400,7 +400,7 @@ func TestMuxArgs(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if diff := cmp.Diff(test.WantArgs, muxArgs(box, "o")); diff != "" {
+			if diff := cmp.Diff(test.WantArgs, muxArgs(box, Streams{}, "o")); diff != "" {
 				t.Errorf("mismatch (-want +got):\n%s", diff)
 			}
 		})

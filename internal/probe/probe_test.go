@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -45,6 +46,22 @@ func TestParse(t *testing.T) {
 		}},
 	}, { // Test 5: A sample rate that is not a number.
 		In: `{"streams":[{"index":0,"codec_type":"audio","sample_rate":"fast"}]}`, Want: ErrProbe,
+	}, { // Test 6: Stream tags and chapters.
+		In: `{"streams":[{"index":0,"codec_type":"audio","tags":{"language":"jpn","title":"Main",` +
+			`"handler_name":"SoundHandler"}}],"chapters":[{"id":0,"time_base":"1/1000","start":0,` +
+			`"start_time":"0.000000","end_time":"61.500000","tags":{"title":"Opening"}},` +
+			`{"id":1,"start_time":"61.500000","end_time":"90.000000"}]}`,
+		WantInfo: Info{
+			Streams: []Stream{{Index: 0, Kind: "audio", Tags: Tags{Language: "jpn", Title: "Main"}}},
+			Chapters: []Chapter{
+				{Start: 0, End: 61500 * time.Millisecond, Title: "Opening"},
+				{Start: 61500 * time.Millisecond, End: 90 * time.Second},
+			},
+		},
+	}, { // Test 7: A chapter start that is not a number.
+		In: `{"chapters":[{"start_time":"soon","end_time":"1.0"}]}`, Want: ErrProbe,
+	}, { // Test 8: A chapter end that is not a number.
+		In: `{"chapters":[{"start_time":"0.0","end_time":"later"}]}`, Want: ErrProbe,
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
@@ -118,6 +135,34 @@ func TestStreamHelpers(t *testing.T) {
 	}
 }
 
+func TestKind(t *testing.T) {
+	t.Parallel()
+	info := Info{Streams: []Stream{
+		{Index: 0, Kind: "video"}, {Index: 1, Kind: "audio"}, {Index: 2, Kind: "subtitle"},
+		{Index: 3, Kind: "audio"},
+	}}
+	tests := []struct {
+		Kind      string
+		WantIndex []int
+	}{
+		{Kind: "audio", WantIndex: []int{1, 3}}, // Test 0: Audio in file order.
+		{Kind: "subtitle", WantIndex: []int{2}}, // Test 1: One subtitle.
+		{Kind: "data", WantIndex: nil},          // Test 2: None of the kind.
+	}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			var got []int
+			for _, s := range info.Kind(test.Kind) {
+				got = append(got, s.Index)
+			}
+			if diff := cmp.Diff(test.WantIndex, got); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 func TestFrameRate(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -150,5 +195,39 @@ func TestRunMissingFile(t *testing.T) {
 	_, err := File(t.Context(), filepath.Join(t.TempDir(), "missing.mp4"))
 	if !errors.Is(err, ErrProbe) {
 		t.Errorf("error = %v, want %v", err, ErrProbe)
+	}
+}
+
+func TestRunChaptersAndTags(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	dir := t.TempDir()
+	meta := filepath.Join(dir, "chapters.txt")
+	chapters := ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=One\n" +
+		"[CHAPTER]\nTIMEBASE=1/1000\nSTART=1000\nEND=2000\ntitle=Two\n"
+	if err := os.WriteFile(meta, []byte(chapters), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(dir, "in.mkv")
+	out, err := exec.CommandContext(t.Context(), "ffmpeg", "-hide_banner", "-loglevel", "error",
+		"-f", "lavfi", "-i", "sine=d=2", "-i", meta, "-map", "0:a", "-map_chapters", "1",
+		"-metadata:s:a:0", "language=fra", "-metadata:s:a:0", "title=Commentary", src).CombinedOutput()
+	if err != nil {
+		t.Fatalf("make fixture: %v: %s", err, out)
+	}
+	info, err := File(t.Context(), src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Chapter{{Start: 0, End: time.Second, Title: "One"},
+		{Start: time.Second, End: 2 * time.Second, Title: "Two"}}
+	if diff := cmp.Diff(want, info.Chapters); diff != "" {
+		t.Errorf("chapters mismatch (-want +got):\n%s", diff)
+	}
+	a, _ := info.FirstAudio()
+	if diff := cmp.Diff(Tags{Language: "fra", Title: "Commentary"}, a.Tags); diff != "" {
+		t.Errorf("tags mismatch (-want +got):\n%s", diff)
 	}
 }

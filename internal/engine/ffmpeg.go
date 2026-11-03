@@ -24,10 +24,12 @@ type FFmpeg struct {
 	bin string
 	// prober reads source metadata.
 	prober Prober
-	// mu guards avail.
+	// mu guards avail and filters.
 	mu sync.Mutex
 	// avail caches the encoder list after the first successful read.
 	avail EncoderSet
+	// filters caches the filter list after the first successful read.
+	filters FilterSet
 }
 
 // NewFFmpeg returns an FFmpeg that uses ffmpeg and ffprobe from PATH.
@@ -73,6 +75,41 @@ func (f *FFmpeg) Encoders(ctx context.Context) (EncoderSet, error) {
 	return set, nil
 }
 
+// Filters returns the filter names the ffmpeg binary offers.
+func (f *FFmpeg) Filters(ctx context.Context) (FilterSet, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.filters != nil {
+		return f.filters, nil
+	}
+	out, err := exec.CommandContext(ctx, f.bin, "-hide_banner", "-filters").Output()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%w: %s: filter list: %w", ErrMissingFilter, f.bin, err)
+	}
+	f.filters = ParseFilters(out)
+	return f.filters, nil
+}
+
+// checkFilters returns an error naming the first filter in names the ffmpeg binary lacks.
+func (f *FFmpeg) checkFilters(ctx context.Context, names []string) error {
+	if len(names) == 0 {
+		return nil
+	}
+	set, err := f.Filters(ctx)
+	if err != nil {
+		return err
+	}
+	for _, name := range names {
+		if !set.Has(name) {
+			return fmt.Errorf("%w: %s: this ffmpeg build lacks it", ErrMissingFilter, name)
+		}
+	}
+	return nil
+}
+
 // Encode converts job.Input to job.Output. The output appears only when the encode succeeds,
 // so a failed or canceled job never leaves a partial file under the final name. A hardware
 // encode that fails is retried once in software.
@@ -105,6 +142,14 @@ func (f *FFmpeg) Encode(ctx context.Context, job Job, report ReportFunc) error {
 	if err != nil {
 		return err
 	}
+	extra := make([]probe.Info, 0, len(job.Streams.ExternalAudio))
+	for _, path := range job.Streams.ExternalAudio {
+		ext, err := f.prober.Probe(ctx, path)
+		if err != nil {
+			return err
+		}
+		extra = append(extra, ext)
+	}
 	avail, err := f.Encoders(ctx)
 	if err != nil {
 		return err
@@ -117,14 +162,17 @@ func (f *FFmpeg) Encode(ctx context.Context, job Job, report ReportFunc) error {
 	partial := partialPath(out, job.Preset.Ext())
 	defer func() { _ = os.Remove(partial) }()
 
-	plan, err := Build(job, info, avail, partial, filepath.Join(work, "pass"))
+	plan, err := Build(job, info, avail, partial, filepath.Join(work, "pass"), extra...)
 	if err != nil {
+		return err
+	}
+	if err := f.checkFilters(ctx, plan.Filters); err != nil {
 		return err
 	}
 	err = f.run(ctx, plan, info.Duration, report)
 	if err != nil && plan.Hardware && ctx.Err() == nil {
 		job.Hardware = false
-		if plan, err = Build(job, info, avail, partial, filepath.Join(work, "pass")); err != nil {
+		if plan, err = Build(job, info, avail, partial, filepath.Join(work, "pass"), extra...); err != nil {
 			return err
 		}
 		err = f.run(ctx, plan, info.Duration, report)

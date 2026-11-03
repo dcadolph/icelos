@@ -6,6 +6,7 @@ import (
 	"os"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dcadolph/icelos/internal/format"
@@ -20,6 +21,9 @@ type Plan struct {
 	Encoder string
 	// Hardware is true when Encoder is a VideoToolbox encoder.
 	Hardware bool
+	// Filters lists the ffmpeg filters the plan needs that some ffmpeg builds lack, such as the
+	// subtitles filter, which needs libass.
+	Filters []string
 }
 
 // Bitrate budget for target-size encodes.
@@ -46,12 +50,18 @@ func TargetVideoBitrate(target int64, dur time.Duration, audioBps int) (int, err
 }
 
 // Build plans the ffmpeg passes that turn job.Input into dest. Two-pass encodes write their
-// statistics under passlog. The video encoder is the first one avail offers in the codec's
-// catalog order that can honor the settings. When job.Hardware is set, a VideoToolbox encoder
-// comes first, except for two-pass encodes, which VideoToolbox cannot run.
-func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string) (Plan, error) {
+// statistics under passlog. Extra holds the probed external audio files of job.Streams in order;
+// files missing from it are planned without their sample rate and channels. The video encoder is
+// the first one avail offers in the codec's catalog order that can honor the settings. When
+// job.Hardware is set, a VideoToolbox encoder comes first, except for two-pass encodes, which
+// VideoToolbox cannot run.
+func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //nolint:funlen // Composes every pass shape.
+	extra ...probe.Info) (Plan, error) {
 	p := job.Preset
 	if err := p.Validate(); err != nil {
+		return Plan{}, err
+	}
+	if err := job.Streams.Validate(); err != nil {
 		return Plan{}, err
 	}
 	box, err := format.ContainerByID(p.Container)
@@ -59,70 +69,74 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string) (Pl
 		return Plan{}, err
 	}
 	video, hasVideo := info.FirstVideo()
-	audio, hasAudio := info.FirstAudio()
 	if p.HasVideo() && !hasVideo {
 		return Plan{}, fmt.Errorf("%w: %s: pick an audio preset", ErrNoVideo, job.Input)
 	}
-	if !p.HasVideo() && !hasAudio {
+	lay, err := planStreams(job, info, extra, box, avail)
+	if err != nil {
+		return Plan{}, err
+	}
+	if !p.HasVideo() && len(lay.Audio) == 0 {
 		return Plan{}, fmt.Errorf("%w: %s", ErrNoAudio, job.Input)
 	}
-	useAudio := p.HasAudio() && hasAudio
 
 	head := []string{"-hide_banner", "-nostdin", "-loglevel", "error", "-nostats",
 		"-progress", "pipe:1", "-y", "-i", job.Input}
-	tail := muxArgs(box, dest)
-	var mapVideo, mapAudio []string
+	final := slices.Concat(head, inputArgs(lay.Inputs))
+	threads := threadArgs(job.Streams)
+	tail := slices.Concat(subtitleOutputArgs(lay), threads, muxArgs(box, job.Streams, dest))
+
+	var (
+		vplan    videoPlan
+		fps      float64
+		mapVideo []string
+	)
 	if p.HasVideo() {
 		mapVideo = []string{"-map", "0:" + strconv.Itoa(video.Index)}
 	}
-	if useAudio {
-		mapAudio = []string{"-map", "0:" + strconv.Itoa(audio.Index)}
-	}
-
-	var (
-		vplan videoPlan
-		fps   float64
-	)
 	if p.HasVideo() && p.Video.Codec != format.Copy {
-		if vplan, err = planVideo(box, p.Video, video, avail, job.Hardware); err != nil {
+		vplan, err = planVideo(box, p.Video, video, avail, job.Hardware && p.Video.RateControl != format.RateTwoPass,
+			lay.Burn)
+		if err != nil {
 			return Plan{}, err
 		}
 		fps = vplan.Frame.FPS
-	}
-	var audioArgs []string
-	if useAudio {
-		if audioArgs, err = planAudio(box, p.Audio, audio, fps, avail); err != nil {
-			return Plan{}, err
+		if vplan.Graph != "" {
+			mapVideo = []string{"-filter_complex", vplan.Graph, "-map", "[v]"}
 		}
+	}
+	mapAudio, audioArgs, err := audioOutputArgs(lay, box, p.Audio, fps, avail)
+	if err != nil {
+		return Plan{}, err
 	}
 
 	switch {
 	case !p.HasVideo():
-		return Plan{Passes: [][]string{slices.Concat(head, mapAudio, audioArgs, tail)}}, nil
+		return Plan{Passes: [][]string{slices.Concat(final, mapAudio, audioArgs, tail)}}, nil
 	case p.Video.Codec == format.Copy:
 		vargs := []string{"-c:v", "copy"}
 		if box.Flags.HVC1Tag && video.Codec == "hevc" {
 			vargs = append(vargs, "-tag:v", "hvc1")
 		}
-		pass := slices.Concat(head, mapVideo, vargs, mapAudio, audioArgs, tail)
+		pass := slices.Concat(final, mapVideo, vargs, mapAudio, audioArgs, tail)
 		return Plan{Passes: [][]string{pass}}, nil
 	}
 
-	plan := Plan{Encoder: vplan.Name, Hardware: vplan.Hardware}
+	plan := Plan{Encoder: vplan.Name, Hardware: vplan.Hardware, Filters: vplan.Filters}
 	spec := videoSpec{Video: p.Video, Bitrate: p.Video.Bitrate, PassLog: passlog}
 	if spec.Bitrate == 0 {
 		spec.Bitrate = vplan.Frame.Bitrate
 	}
 	if p.Video.RateControl != format.RateTwoPass {
 		vargs := slices.Concat(vplan.Head, vplan.Encoder.Args(spec))
-		plan.Passes = [][]string{slices.Concat(head, mapVideo, vargs, mapAudio, audioArgs, tail)}
+		plan.Passes = [][]string{slices.Concat(final, mapVideo, vargs, mapAudio, audioArgs, tail)}
 		return plan, nil
 	}
 
 	if p.TargetBytes > 0 {
 		audioBps := 0
-		if useAudio {
-			audioBps = p.Audio.Bitrate
+		if len(lay.Audio) != 0 {
+			audioBps = p.Audio.Bitrate * len(lay.Audio)
 		}
 		if spec.Bitrate, err = TargetVideoBitrate(p.TargetBytes, info.Duration, audioBps); err != nil {
 			return Plan{}, err
@@ -132,8 +146,8 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string) (Pl
 		spec.Pass = n
 		return slices.Concat(vplan.Head, vplan.Encoder.Args(spec))
 	}
-	first := slices.Concat(head, mapVideo, pass(1), []string{"-an", "-f", "null", os.DevNull})
-	second := slices.Concat(head, mapVideo, pass(2), mapAudio, audioArgs, tail)
+	first := slices.Concat(head, mapVideo, pass(1), threads, []string{"-an", "-f", "null", os.DevNull})
+	second := slices.Concat(final, mapVideo, pass(2), mapAudio, audioArgs, tail)
 	plan.Passes = [][]string{first, second}
 	return plan, nil
 }
@@ -150,12 +164,18 @@ type videoPlan struct {
 	Frame frame
 	// Head holds -c:v, the encoder setup, and the frame arguments, which every pass shares.
 	Head []string
+	// Graph is the -filter_complex graph whose output [v] replaces the source video, empty when
+	// the filters fit -vf.
+	Graph string
+	// Filters lists the filters that some ffmpeg builds lack.
+	Filters []string
 }
 
 // planVideo picks the encoder and frame settings that turn the source stream src into v inside
-// container box. Hardware asks for a VideoToolbox encoder where one can honor v.
+// container box, drawing in subtitles as b says. Hardware asks for a VideoToolbox encoder where
+// one can honor v.
 func planVideo(box format.Container, v format.Video, src probe.Stream, avail EncoderSet,
-	hardware bool) (videoPlan, error) {
+	hardware bool, b burn) (videoPlan, error) {
 	codec, err := format.CodecByID(v.Codec)
 	if err != nil {
 		return videoPlan{}, err
@@ -164,14 +184,30 @@ func planVideo(box format.Container, v format.Video, src probe.Stream, avail Enc
 	if err != nil {
 		return videoPlan{}, err
 	}
-	vp, err := pickVideoEncoder(box, codec, v, avail, hardware && v.RateControl != format.RateTwoPass)
+	vp, err := pickVideoEncoder(box, codec, v, avail, hardware)
 	if err != nil {
 		return videoPlan{}, err
 	}
 	enc := vp.Encoder
 	head := append([]string{"-c:v", vp.Name}, enc.Setup...)
+	var chain []string
 	if f.Scale != "" {
-		head = append(head, "-vf", f.Scale)
+		chain = append(chain, f.Scale)
+	}
+	switch {
+	case b.Overlay != "":
+		vp.Graph = fmt.Sprintf("[0:%d][%s]overlay=eof_action=pass", src.Index, b.Overlay)
+		if len(chain) != 0 {
+			vp.Graph += "," + strings.Join(chain, ",")
+		}
+		vp.Graph += "[v]"
+		vp.Filters = []string{"overlay"}
+	case b.Filter != "":
+		chain = append(chain, b.Filter)
+		vp.Filters = []string{"subtitles"}
+		fallthrough
+	case len(chain) != 0:
+		head = append(head, "-vf", strings.Join(chain, ","))
 	}
 	if f.FPS > 0 {
 		head = append(head, "-r", rateArg(f.FPS))
@@ -482,11 +518,19 @@ func channels(box format.Container, codec format.Codec, a format.Audio, src prob
 	return 0
 }
 
-// muxArgs returns the output arguments that end every final pass: metadata, the container's
-// muxer flags, the muxer itself, and the destination. Naming the muxer keeps extensions ffmpeg
-// does not know, such as .m4r and .trp, working.
-func muxArgs(box format.Container, dest string) []string {
-	args := []string{"-map_metadata", "0"}
+// muxArgs returns the output arguments that end every final pass: chapters, metadata, the
+// container's muxer flags, the muxer itself, and the destination. Naming the muxer keeps
+// extensions ffmpeg does not know, such as .m4r and .trp, working.
+func muxArgs(box format.Container, s Streams, dest string) []string {
+	var args []string
+	if s.DropChapters {
+		args = append(args, "-map_chapters", "-1")
+	}
+	if s.DropMetadata {
+		args = append(args, "-map_metadata", "-1")
+	} else {
+		args = append(args, "-map_metadata", "0")
+	}
 	if box.Flags.Faststart {
 		args = append(args, "-movflags", "+faststart")
 	}

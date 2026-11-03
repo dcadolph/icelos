@@ -35,6 +35,8 @@ type Stream struct {
 	BaseFrameRate string `json:"r_frame_rate,omitempty"`
 	// Disposition carries the stream role flags.
 	Disposition Disposition `json:"disposition"`
+	// Tags carries the stream's language and title.
+	Tags Tags `json:"tags,omitzero"`
 	// SideData carries per-stream extras such as the display matrix.
 	SideData []SideData `json:"side_data_list"`
 }
@@ -43,6 +45,14 @@ type Stream struct {
 type Disposition struct {
 	// AttachedPic is 1 when the stream is embedded cover art rather than motion video.
 	AttachedPic int `json:"attached_pic"`
+}
+
+// Tags holds the stream tags icelos shows when choosing tracks.
+type Tags struct {
+	// Language is the ISO 639-2 language code, such as "eng", empty when untagged.
+	Language string `json:"language,omitempty"`
+	// Title is the track name the file gives, empty when untagged.
+	Title string `json:"title,omitempty"`
 }
 
 // SideData is one ffprobe side data entry.
@@ -116,6 +126,28 @@ func (i Info) FirstAudio() (Stream, bool) {
 	return Stream{}, false
 }
 
+// Kind returns the streams of the given kind in file order, so position n is the stream ffmpeg
+// selects with the specifier "a:n" or "s:n".
+func (i Info) Kind(kind string) []Stream {
+	var out []Stream
+	for _, s := range i.Streams {
+		if s.Kind == kind {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// Chapter is one chapter mark in a media file.
+type Chapter struct {
+	// Start is where the chapter begins.
+	Start time.Duration `json:"startNs"`
+	// End is where the chapter ends.
+	End time.Duration `json:"endNs"`
+	// Title is the chapter name, empty when untitled.
+	Title string `json:"title,omitempty"`
+}
+
 // Info holds the metadata for one media file.
 type Info struct {
 	// Format is the container short name list, e.g. "mov,mp4,m4a,3gp,3g2,mj2".
@@ -126,6 +158,8 @@ type Info struct {
 	Size int64 `json:"size"`
 	// Streams lists every stream in the file.
 	Streams []Stream `json:"streams"`
+	// Chapters lists the chapter marks in playing order.
+	Chapters []Chapter `json:"chapters,omitempty"`
 }
 
 // rawOutput mirrors the ffprobe JSON document.
@@ -141,6 +175,21 @@ type rawOutput struct {
 	} `json:"format"`
 	// Streams is the stream section.
 	Streams []Stream `json:"streams"`
+	// Chapters is the chapter section.
+	Chapters []rawChapter `json:"chapters"`
+}
+
+// rawChapter mirrors one ffprobe chapter entry.
+type rawChapter struct {
+	// StartTime is the start in seconds as a decimal string.
+	StartTime string `json:"start_time"`
+	// EndTime is the end in seconds as a decimal string.
+	EndTime string `json:"end_time"`
+	// Tags carries the chapter title.
+	Tags struct {
+		// Title is the chapter name.
+		Title string `json:"title"`
+	} `json:"tags"`
 }
 
 // Parse decodes ffprobe JSON output into Info.
@@ -151,11 +200,22 @@ func Parse(data []byte) (Info, error) {
 	}
 	info := Info{Format: raw.Format.Name, Streams: raw.Streams}
 	if raw.Format.Duration != "" {
-		secs, err := strconv.ParseFloat(raw.Format.Duration, 64)
+		d, err := seconds(raw.Format.Duration)
 		if err != nil {
 			return Info{}, fmt.Errorf("%w: duration: %w", ErrProbe, err)
 		}
-		info.Duration = time.Duration(secs * float64(time.Second))
+		info.Duration = d
+	}
+	for _, c := range raw.Chapters {
+		start, err := seconds(c.StartTime)
+		if err != nil {
+			return Info{}, fmt.Errorf("%w: chapter start: %w", ErrProbe, err)
+		}
+		end, err := seconds(c.EndTime)
+		if err != nil {
+			return Info{}, fmt.Errorf("%w: chapter end: %w", ErrProbe, err)
+		}
+		info.Chapters = append(info.Chapters, Chapter{Start: start, End: end, Title: c.Tags.Title})
 	}
 	if raw.Format.Size != "" {
 		size, err := strconv.ParseInt(raw.Format.Size, 10, 64)
@@ -167,6 +227,15 @@ func Parse(data []byte) (Info, error) {
 	return info, nil
 }
 
+// seconds parses a decimal seconds string such as "12.5" into a duration.
+func seconds(s string) (time.Duration, error) {
+	secs, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0, err
+	}
+	return time.Duration(secs * float64(time.Second)), nil
+}
+
 // File runs the ffprobe found on PATH against path and returns the parsed metadata.
 func File(ctx context.Context, path string) (Info, error) {
 	return Run(ctx, "ffprobe", path)
@@ -175,7 +244,7 @@ func File(ctx context.Context, path string) (Info, error) {
 // Run runs the ffprobe binary at bin against path and returns the parsed metadata.
 func Run(ctx context.Context, bin, path string) (Info, error) {
 	cmd := exec.CommandContext(ctx, bin, "-v", "error", "-print_format", "json",
-		"-show_format", "-show_streams", "-i", path)
+		"-show_format", "-show_streams", "-show_chapters", "-i", path)
 	out, err := cmd.Output()
 	if err != nil {
 		var exitErr *exec.ExitError

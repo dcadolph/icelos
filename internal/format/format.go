@@ -164,6 +164,8 @@ type Container struct {
 	SampleRates []int `json:"sampleRates,omitempty"`
 	// Channels is the only audio channel count the muxer accepts, zero when the codec decides.
 	Channels int `json:"channels,omitempty"`
+	// AudioTracks is the most audio streams the muxer accepts, zero when it takes any number.
+	AudioTracks int `json:"audioTracks,omitempty"`
 	// Modes lists the only frame shapes the container's players accept, such as the DVD sizes in
 	// VOB, empty when the codec decides.
 	Modes []Mode `json:"modes,omitempty"`

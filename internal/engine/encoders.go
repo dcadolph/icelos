@@ -35,11 +35,33 @@ func ParseEncoders(out []byte) EncoderSet {
 	return set
 }
 
-// Drives reports whether icelos has an argument builder for the named encoder.
+// FilterSet is the set of filter names an ffmpeg build offers.
+type FilterSet map[string]bool
+
+// Has reports whether name is in the set.
+func (s FilterSet) Has(name string) bool {
+	return s[name]
+}
+
+// ParseFilters reads the output of "ffmpeg -hide_banner -filters", whose entries are a flag
+// column, the filter name, and its input and output kinds joined by "->".
+func ParseFilters(out []byte) FilterSet {
+	set := FilterSet{}
+	sc := bufio.NewScanner(bytes.NewReader(out))
+	for sc.Scan() {
+		if fields := strings.Fields(sc.Text()); len(fields) >= 3 && strings.Contains(fields[2], "->") {
+			set[fields[1]] = true
+		}
+	}
+	return set
+}
+
+// Drives reports whether icelos has an argument builder for the named encoder. Subtitle
+// encoders need no arguments, so every catalog subtitle encoder counts.
 func Drives(name string) bool {
 	_, video := videoEncoders[name]
 	_, audio := audioEncoders[name]
-	return video || audio
+	return video || audio || slices.Contains(subtitleEncoders, name)
 }
 
 // Usable returns the sorted names of the catalog encoders that set offers and icelos can drive.

@@ -23,4 +23,10 @@ var (
 	ErrSameFile = errors.New("output is the input")
 	// ErrOutput is returned when the output cannot be prepared or moved into place.
 	ErrOutput = errors.New("output failed")
+	// ErrStreams is returned when a job's stream selection is invalid or the output cannot hold it.
+	ErrStreams = errors.New("stream selection invalid")
+	// ErrNoSubtitle is returned when a job asks for a subtitle track the input does not have.
+	ErrNoSubtitle = errors.New("input has no such subtitle")
+	// ErrMissingFilter is returned when ffmpeg lacks a filter the job needs.
+	ErrMissingFilter = errors.New("filter not available")
 )

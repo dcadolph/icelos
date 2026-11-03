@@ -21,6 +21,8 @@ type Job struct {
 	Hardware bool `json:"hardware"`
 	// Overwrite replaces Output if it already exists.
 	Overwrite bool `json:"overwrite"`
+	// Streams chooses the tracks, subtitles, chapters, and metadata the output carries.
+	Streams Streams `json:"streams,omitzero"`
 }
 
 // Progress is one status report during an encode.

@@ -193,6 +193,9 @@ var audioEncoders = map[string]audioEncoder{ //nolint:gochecknoglobals // Read-o
 	}},
 }
 
+// subtitleEncoders lists the catalog subtitle encoders, which take no arguments of their own.
+var subtitleEncoders = []string{"mov_text", "srt", "ass", "webvtt"} //nolint:gochecknoglobals // Read-only table.
+
 // scaled returns the entry of scale for quality q as an argument.
 func scaled(scale [3]int, q format.Quality) string {
 	return strconv.Itoa(scale[qualityIndex(q)])
