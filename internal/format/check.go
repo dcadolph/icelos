@@ -209,7 +209,8 @@ func checkAudio(c Container, a Audio) error {
 		known := slices.ContainsFunc(domains.Channels, func(l ChannelLayout) bool {
 			return l.Count == a.Channels
 		})
-		if !known || (codec.MaxChannels != 0 && a.Channels > codec.MaxChannels) {
+		if !known || (codec.MaxChannels != 0 && a.Channels > codec.MaxChannels) ||
+			(c.Channels != 0 && a.Channels != c.Channels) {
 			return fmt.Errorf("%w: %s does not carry %d channels", ErrSetting, codec.ID, a.Channels)
 		}
 	}

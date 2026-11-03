@@ -137,6 +137,9 @@ type Flags struct {
 	HVC1Tag bool `json:"hvc1Tag,omitempty"`
 	// M2TS writes Blu-ray style 192-byte transport packets.
 	M2TS bool `json:"m2ts,omitempty"`
+	// Shortest ends the file with its shortest stream, for muxers that refuse a last video frame
+	// without its full share of audio.
+	Shortest bool `json:"shortest,omitempty"`
 }
 
 // Container is one output file format.
@@ -159,6 +162,8 @@ type Container struct {
 	Subtitles []string `json:"subtitles,omitempty"`
 	// SampleRates lists the only audio sample rates the muxer accepts, empty when the codec decides.
 	SampleRates []int `json:"sampleRates,omitempty"`
+	// Channels is the only audio channel count the muxer accepts, zero when the codec decides.
+	Channels int `json:"channels,omitempty"`
 	// Modes lists the only frame shapes the container's players accept, such as the DVD sizes in
 	// VOB, empty when the codec decides.
 	Modes []Mode `json:"modes,omitempty"`
