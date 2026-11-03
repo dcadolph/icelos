@@ -44,7 +44,7 @@ func TestUsable(t *testing.T) {
 		In        EncoderSet
 	}{{ // Test 0: Only catalog encoders with a builder count.
 		In:        EncoderSet{"libx264": true, "png": true, "aac_at": true, "libtheora": true},
-		WantNames: []string{"aac_at", "libx264"},
+		WantNames: []string{"aac_at", "libtheora", "libx264"},
 	}, { // Test 1: Empty set.
 		In: EncoderSet{},
 	}}
@@ -70,8 +70,10 @@ func TestAvailable(t *testing.T) {
 		Codec: "hevc", In: EncoderSet{"hevc_videotoolbox": true}, WantResult: true,
 	}, { // Test 2: No encoder for the codec.
 		Codec: "hevc", In: EncoderSet{"libx264": true},
-	}, { // Test 3: Present in ffmpeg but icelos has no builder.
-		Codec: "theora", In: EncoderSet{"libtheora": true},
+	}, { // Test 3: Theora through the bundled ffmpeg's libtheora.
+		Codec: "theora", In: EncoderSet{"libtheora": true}, WantResult: true,
+	}, { // Test 4: An encoder outside the catalog makes nothing available.
+		Codec: "theora", In: EncoderSet{"png": true},
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {

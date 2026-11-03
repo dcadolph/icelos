@@ -453,11 +453,11 @@ func TestNewCatalog(t *testing.T) {
 	tests := []struct {
 		In            engine.EncoderSet
 		WantAvailable map[string]bool
-	}{{ // Test 0: libx265 makes HEVC available, and theora has no encoder icelos drives.
+	}{{ // Test 0: libx265 and libtheora make HEVC and Theora available.
 		In:            engine.EncoderSet{"libx265": true, "libtheora": true, "aac": true},
-		WantAvailable: map[string]bool{"hevc": true, "theora": false, "aac": true, "h264": false},
-	}, { // Test 1: Without libx265 HEVC is unavailable.
-		In:            engine.EncoderSet{"libtheora": true, "aac": true},
+		WantAvailable: map[string]bool{"hevc": true, "theora": true, "aac": true, "h264": false},
+	}, { // Test 1: Without libx265 and libtheora HEVC and Theora are unavailable.
+		In:            engine.EncoderSet{"aac": true},
 		WantAvailable: map[string]bool{"hevc": false, "theora": false, "aac": true, "h264": false},
 	}}
 	for testNum, test := range tests {

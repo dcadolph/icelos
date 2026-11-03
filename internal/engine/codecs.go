@@ -61,6 +61,7 @@ var ( //nolint:gochecknoglobals // Read-only tables.
 	vp8Quality    = [3]int{6, 10, 18}
 	qscaleQuality = [3]int{3, 5, 8}
 	cfhdQuality   = [3]int{3, 6, 10}
+	theoraQuality = [3]int{8, 6, 4}
 )
 
 // Encoder settings that are not user choices.
@@ -81,7 +82,7 @@ const (
 var vtH264Levels = []string{ //nolint:gochecknoglobals // Read-only table.
 	"3.0", "3.1", "3.2", "4.0", "4.1", "4.2", "5.0", "5.1", "5.2"}
 
-// videoEncoders holds every catalog video encoder the Homebrew ffmpeg build offers. Encoders the
+// videoEncoders holds every catalog video encoder the bundled ffmpeg build offers. Encoders the
 // catalog lists but this table lacks are reported missing by Build.
 var videoEncoders = map[string]videoEncoder{ //nolint:gochecknoglobals // Read-only table.
 	"libx264": {Setup: []string{"-preset", softwarePreset}, Args: func(s videoSpec) []string {
@@ -132,6 +133,12 @@ var videoEncoders = map[string]videoEncoder{ //nolint:gochecknoglobals // Read-o
 	"dvvideo": {Args: func(videoSpec) []string {
 		return []string{"-chroma_sample_location", "topleft"}
 	}},
+	"libtheora": {Args: func(s videoSpec) []string {
+		if s.Video.RateControl == format.RateQuality {
+			return []string{"-q:v", scaled(theoraQuality, s.Video.Quality)}
+		}
+		return bitrateArgs(s)
+	}},
 	"ffv1": {Args: func(videoSpec) []string { return []string{"-level", "3"} }},
 	"prores_ks": {Args: func(s videoSpec) []string {
 		return append(profileLevel(s.Video, nil), "-vendor", "apl0")
@@ -151,21 +158,23 @@ var videoEncoders = map[string]videoEncoder{ //nolint:gochecknoglobals // Read-o
 	}},
 }
 
-// audioEncoders holds every catalog audio encoder the Homebrew ffmpeg build offers. The generic
+// audioEncoders holds every catalog audio encoder the bundled ffmpeg build offers. The generic
 // bitrate, channel, and sample rate arguments come from Build; these add the rest.
 var audioEncoders = map[string]audioEncoder{ //nolint:gochecknoglobals // Read-only table.
-	"aac_at":     {},
-	"aac":        {},
-	"libmp3lame": {},
-	"ac3":        {},
-	"eac3":       {},
-	"libopus":    {},
-	"wmav2":      {},
-	"mp2":        {},
-	"pcm_s16le":  {},
-	"pcm_s24le":  {},
-	"pcm_s16be":  {},
-	"pcm_s24be":  {},
+	"aac_at":            {},
+	"aac":               {},
+	"libmp3lame":        {},
+	"ac3":               {},
+	"eac3":              {},
+	"libopus":           {},
+	"libvorbis":         {},
+	"wmav2":             {},
+	"mp2":               {},
+	"libopencore_amrnb": {},
+	"pcm_s16le":         {},
+	"pcm_s24le":         {},
+	"pcm_s16be":         {},
+	"pcm_s24be":         {},
 	"flac": {Args: func(a format.Audio, _ float64) []string {
 		switch a.BitDepth {
 		case 16:

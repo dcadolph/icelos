@@ -125,6 +125,13 @@ func TestVideoEncoderArgs(t *testing.T) { //nolint:funlen // Test function.
 		Encoder: "dvvideo", WantArgs: []string{"-chroma_sample_location", "topleft"},
 	}, { // Test 19: FFV1 version 3.
 		Encoder: "ffv1", WantArgs: []string{"-level", "3"},
+	}, { // Test 20: Theora quality, where higher is better.
+		Encoder:  "libtheora",
+		Spec:     videoSpec{Video: format.Video{RateControl: format.RateQuality, Quality: format.QualityHigh}},
+		WantArgs: []string{"-q:v", "8"},
+	}, { // Test 21: Theora variable bitrate.
+		Encoder: "libtheora", Spec: videoSpec{Video: format.Video{RateControl: format.RateVBR}, Bitrate: 2_000_000},
+		WantArgs: []string{"-b:v", "2000000"},
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
@@ -164,8 +171,8 @@ func TestPickVideoEncoder(t *testing.T) {
 		Codec: "prores", Container: "mov", Hardware: true,
 		Avail:       EncoderSet{"prores_ks": true, "prores_videotoolbox": true},
 		WantEncoder: "prores_videotoolbox", WantHardware: true,
-	}, { // Test 5: An encoder without a builder is missing.
-		Codec: "theora", Container: "ogv", Avail: EncoderSet{"libtheora": true}, Want: ErrMissingEncoder,
+	}, { // Test 5: An encoder the ffmpeg build lacks is missing.
+		Codec: "theora", Container: "ogv", Avail: EncoderSet{"libx264": true}, Want: ErrMissingEncoder,
 	}, { // Test 6: Software off never uses hardware.
 		Codec: "h264", Container: "mp4", Avail: EncoderSet{"h264_videotoolbox": true},
 		Want: ErrMissingEncoder,
@@ -283,7 +290,8 @@ func TestFrameFor(t *testing.T) { //nolint:funlen // Test function.
 func TestPlanAudio(t *testing.T) { //nolint:funlen // Test function.
 	t.Parallel()
 	full := EncoderSet{"aac_at": true, "aac": true, "libopus": true, "flac": true, "alac": true,
-		"alac_at": true, "pcm_s16le": true, "adpcm_ima_amv": true, "libmp3lame": true}
+		"alac_at": true, "pcm_s16le": true, "adpcm_ima_amv": true, "libmp3lame": true,
+		"libvorbis": true, "libopencore_amrnb": true}
 	tests := []struct {
 		Want      error
 		Container string
@@ -332,6 +340,14 @@ func TestPlanAudio(t *testing.T) { //nolint:funlen // Test function.
 		Container: "mkv", Audio: format.Audio{Codec: format.Copy}, WantArgs: []string{"-c:a", "copy"},
 	}, { // Test 12: Unknown codec.
 		Container: "mkv", Audio: format.Audio{Codec: "nope"}, Want: format.ErrUnknownCodec,
+	}, { // Test 13: Vorbis takes the generic bitrate.
+		Container: "ogg", Audio: format.Audio{Codec: "vorbis", Bitrate: 192_000},
+		Source:   probe.Stream{Channels: 2, SampleRate: 48000},
+		WantArgs: []string{"-c:a", "libvorbis", "-b:a", "192000"},
+	}, { // Test 14: AMR-NB is mono 8 kHz.
+		Container: "amr", Audio: format.Audio{Codec: "amr_nb", Bitrate: 12_200},
+		Source:   probe.Stream{Channels: 2, SampleRate: 48000},
+		WantArgs: []string{"-c:a", "libopencore_amrnb", "-b:a", "12200", "-ac", "1", "-ar", "8000"},
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
