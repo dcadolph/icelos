@@ -281,6 +281,8 @@ func TestPlan(t *testing.T) { //nolint:funlen // Test function.
 		`{"id":"p5","op":"plan","input":"`+clip+`","preset":"compatible","outDir":"`+dir+`",`+
 			`"streams":{"externalAudio":["`+voice+`"],"threads":2}}`,
 		`{"id":"p6","op":"plan","input":"`+voice+`","preset":"web"}`,
+		`{"id":"p7","op":"plan","input":"`+clip+`","preset":"compatible","hardware":false,"passthrough":true}`,
+		`{"id":"p8","op":"plan","input":"`+clip+`",`+small+`,"passthrough":true}`,
 		`{"id":"a0","op":"add","input":"`+clip+`","preset":"web","streams":{"threads":3,"dropChapters":true}}`,
 		`{"id":"a1","op":"add","input":"`+clip+`","preset":"web","streams":{"subtitles":{"mode":"wild"}}}`,
 		`{"id":"s0","op":"add","input":"`+chaptered+`","preset":"web","splitChapters":true}`,
@@ -301,22 +303,27 @@ func TestPlan(t *testing.T) { //nolint:funlen // Test function.
 		WantError    string
 		WantVideo    string
 		WantAudio    string
+		WantCopied   string
 		WantEncoder  string
 		WantPasses   int
 		WantLossless bool
 		WantHardware bool
 	}{
-		{Reply: "p0", WantVideo: "copy", WantAudio: "copy", WantLossless: true, WantEncoder: "libx264",
-			WantPasses: 1}, // Test 0: Copyable source.
+		{Reply: "p0", WantVideo: "copy", WantAudio: "copy", WantEncoder: "libx264",
+			WantCopied: "passthrough off passthrough off", WantPasses: 1}, // Test 0: Copyable source.
 		{Reply: "p1", WantVideo: engine.ReasonResize, WantAudio: "copy", WantEncoder: "libx264",
-			WantPasses: 1}, // Test 1: Resize rules video out.
+			WantCopied: "resize passthrough off", WantPasses: 1}, // Test 1: Resize rules video out.
 		{Reply: "p2", WantVideo: engine.ReasonCodec, WantAudio: "copy", WantEncoder: "hevc_videotoolbox",
-			WantHardware: true, WantPasses: 1}, // Test 2: Hardware HEVC.
+			WantCopied: "codec passthrough off", WantHardware: true, WantPasses: 1}, // Test 2: Hardware HEVC.
 		{Reply: "p3", WantError: "stream selection invalid"}, // Test 3: Bad streams.
 		{Reply: "p4", WantError: "probe failed"},             // Test 4: Probe failure.
-		{Reply: "p5", WantVideo: "copy", WantAudio: "copy", WantLossless: true, WantEncoder: "libx264",
-			WantPasses: 1}, // Test 5: Probed external audio.
+		{Reply: "p5", WantVideo: "copy", WantAudio: "copy", WantEncoder: "libx264",
+			WantCopied: "passthrough off passthrough off", WantPasses: 1}, // Test 5: Probed external audio.
 		{Reply: "p6", WantError: "input has no video"}, // Test 6: Audio file, video preset.
+		{Reply: "p7", WantVideo: "copy", WantAudio: "copy", WantCopied: "copy copy", WantLossless: true,
+			WantPasses: 1}, // Test 7: Passthrough copies a copyable source.
+		{Reply: "p8", WantVideo: engine.ReasonResize, WantAudio: "copy", WantEncoder: "libx264",
+			WantCopied: "resize copy", WantPasses: 1}, // Test 8: Passthrough with a resize.
 	}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
@@ -333,6 +340,9 @@ func TestPlan(t *testing.T) { //nolint:funlen // Test function.
 			}
 			if v, a := verdict(p.Copy.Video), verdict(p.Copy.Audio); v != test.WantVideo || a != test.WantAudio {
 				t.Errorf("verdicts = %s %s, want %s %s", v, a, test.WantVideo, test.WantAudio)
+			}
+			if c := verdict(p.Copied.Video) + " " + verdict(p.Copied.Audio); c != test.WantCopied {
+				t.Errorf("copied = %s, want %s", c, test.WantCopied)
 			}
 			if p.Lossless != test.WantLossless || p.Encoder != test.WantEncoder ||
 				p.Hardware != test.WantHardware || len(p.Passes) != test.WantPasses {

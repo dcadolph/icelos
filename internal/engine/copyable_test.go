@@ -3,7 +3,9 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -145,6 +147,86 @@ func TestCopyLossless(t *testing.T) {
 			t.Parallel()
 			if got := test.In.Lossless(); got != test.Want {
 				t.Errorf("Lossless = %v, want %v", got, test.Want)
+			}
+		})
+	}
+}
+
+func TestBuildPassthrough(t *testing.T) { //nolint:funlen // Test function.
+	t.Parallel()
+	with := func(id string, edit func(*preset.Preset)) preset.Preset {
+		p := testPreset(t, id)
+		if edit != nil {
+			edit(&p)
+		}
+		return p
+	}
+	tests := []struct {
+		WantCopied  Copy
+		Preset      preset.Preset
+		Streams     Streams
+		WantEncoder string
+		WantHas     []string
+		WantLacks   []string
+		WantPasses  int
+		Passthrough bool
+	}{{ // Test 0: Web on a source it already matches copies both streams.
+		Preset: with("web", nil), Passthrough: true,
+		WantCopied: Copy{Video: yes(), Audio: yes()}, WantPasses: 1,
+		WantHas: []string{"-c:v copy", "-c:a copy"}, WantLacks: []string{"scale", "-crf"},
+	}, { // Test 1: Without passthrough the same job encodes.
+		Preset: with("web", nil), WantEncoder: "libx264", WantPasses: 1,
+		WantCopied: Copy{Video: noFor(ReasonPassthroughOff), Audio: noFor(ReasonPassthroughOff)},
+		WantHas:    []string{"-c:v libx264", "-c:a aac"}, WantLacks: []string{"copy"},
+	}, { // Test 2: A resize encodes the video and still copies the audio.
+		Preset: with("web", func(p *preset.Preset) {
+			p.Video.Width, p.Video.MaxWidth, p.Video.MaxHeight = 1280, 0, 0
+		}), Passthrough: true, WantEncoder: "libx264", WantPasses: 1,
+		WantCopied: Copy{Video: noFor(ReasonResize), Audio: yes()},
+		WantHas:    []string{"-c:v libx264", "scale=", "-c:a copy"}, WantLacks: []string{"-c:v copy"},
+	}, { // Test 3: Remux copies whether or not passthrough is asked for.
+		Preset: with("remux", nil), WantPasses: 1,
+		WantCopied: Copy{Video: yes(), Audio: yes()}, WantHas: []string{"-c:v copy", "-c:a copy"},
+	}, { // Test 4: A target size keeps both passes.
+		Preset: with(preset.TargetSizeID, nil).WithTargetSize(5_000_000), Passthrough: true,
+		WantEncoder: "libx264", WantPasses: 2,
+		WantCopied: Copy{Video: noFor(ReasonTargetSize), Audio: noFor(ReasonTargetSize)},
+		WantHas:    []string{"-pass 2"}, WantLacks: []string{"copy"},
+	}, { // Test 5: One track of another codec keeps every track encoded.
+		Preset: with("compatible", nil), Passthrough: true, Streams: Streams{AudioTracks: []int{AllTracks}},
+		WantCopied: Copy{Video: yes(), Audio: noFor(ReasonCodec)}, WantPasses: 1,
+		WantHas: []string{"-c:v copy", "-c:a:0 aac", "-c:a:1 aac"}, WantLacks: []string{"-c:a:0 copy"},
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			info := streamsInfo()
+			info.Duration = 10 * time.Second
+			job := Job{Input: "in.mov", Output: "out.mp4", Preset: test.Preset, Streams: test.Streams,
+				Passthrough: test.Passthrough}
+			got, err := Build(job, info, testAvail(), "out.mp4", "plog")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(test.WantCopied, got.Copied); diff != "" {
+				t.Errorf("copied mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(test.WantEncoder, got.Encoder); diff != "" {
+				t.Errorf("encoder mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(test.WantPasses, len(got.Passes)); diff != "" {
+				t.Fatalf("pass count mismatch (-want +got):\n%s", diff)
+			}
+			last := strings.Join(got.Passes[len(got.Passes)-1], " ")
+			for _, s := range test.WantHas {
+				if !strings.Contains(last, s) {
+					t.Errorf("final pass lacks %q: %s", s, last)
+				}
+			}
+			for _, s := range test.WantLacks {
+				if strings.Contains(last, s) {
+					t.Errorf("final pass has %q: %s", s, last)
+				}
 			}
 		})
 	}

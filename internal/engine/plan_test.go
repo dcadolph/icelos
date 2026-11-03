@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/dcadolph/icelos/internal/format"
 	"github.com/dcadolph/icelos/internal/preset"
@@ -178,7 +179,7 @@ func TestBuild(t *testing.T) { //nolint:funlen // Test function.
 				t.Fatalf("error = %v, want %v", err, test.Want)
 			}
 			want := Plan{Passes: test.WantPasses, Encoder: test.WantEncoder, Hardware: test.WantHardware}
-			if diff := cmp.Diff(want, got); diff != "" {
+			if diff := cmp.Diff(want, got, cmpopts.IgnoreFields(Plan{}, "Copied")); diff != "" {
 				t.Errorf("mismatch (-want +got):\n%s", diff)
 			}
 		})

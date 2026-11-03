@@ -24,6 +24,8 @@ type Plan struct {
 	// Filters lists the ffmpeg filters the plan needs that some ffmpeg builds lack, such as the
 	// subtitles filter, which needs libass.
 	Filters []string
+	// Copied records which kinds of stream the plan copies instead of encoding.
+	Copied Copy
 }
 
 // Bitrate budget for target-size encodes.
@@ -82,6 +84,14 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //n
 	if !p.HasVideo() && len(lay.Audio) == 0 {
 		return Plan{}, fmt.Errorf("%w: %s", ErrNoAudio, job.Input)
 	}
+	verdict, err := verdicts(box, p.Target, info, lay)
+	if err != nil {
+		return Plan{}, err
+	}
+	if job.Passthrough {
+		p.Target = passthrough(p.Target, verdict)
+	}
+	done := copied(p.Target, verdict)
 	lay.Burn.Filter = shiftBurn(lay.Burn.Filter, job.Range.Start)
 
 	ranged := job.Range.args()
@@ -117,17 +127,17 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //n
 
 	switch {
 	case !p.HasVideo():
-		return Plan{Passes: [][]string{slices.Concat(final, mapAudio, audioArgs, tail)}}, nil
+		return Plan{Passes: [][]string{slices.Concat(final, mapAudio, audioArgs, tail)}, Copied: done}, nil
 	case p.Video.Codec == format.Copy:
 		vargs := []string{"-c:v", "copy"}
 		if box.Flags.HVC1Tag && video.Codec == "hevc" {
 			vargs = append(vargs, "-tag:v", "hvc1")
 		}
 		pass := slices.Concat(final, mapVideo, vargs, mapAudio, audioArgs, tail)
-		return Plan{Passes: [][]string{pass}}, nil
+		return Plan{Passes: [][]string{pass}, Copied: done}, nil
 	}
 
-	plan := Plan{Encoder: vplan.Name, Hardware: vplan.Hardware, Filters: vplan.Filters}
+	plan := Plan{Encoder: vplan.Name, Hardware: vplan.Hardware, Filters: vplan.Filters, Copied: done}
 	spec := videoSpec{Video: p.Video, Bitrate: p.Video.Bitrate, PassLog: passlog}
 	if spec.Bitrate == 0 {
 		spec.Bitrate = vplan.Frame.Bitrate

@@ -21,6 +21,8 @@ type Job struct {
 	Preset preset.Preset `json:"preset"`
 	// Hardware prefers the VideoToolbox encoders and falls back to software if they fail.
 	Hardware bool `json:"hardware"`
+	// Passthrough copies every stream that already matches the preset instead of encoding it.
+	Passthrough bool `json:"passthrough,omitempty"`
 	// Overwrite replaces Output if it already exists.
 	Overwrite bool `json:"overwrite"`
 	// Streams chooses the tracks, subtitles, chapters, and metadata the output carries.

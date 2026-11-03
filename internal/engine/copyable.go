@@ -35,6 +35,8 @@ const (
 	ReasonChannels = "channels"
 	// ReasonBitDepth means the settings pin a bit depth the source may not have.
 	ReasonBitDepth = "bit depth"
+	// ReasonPassthroughOff means the stream qualifies but the job did not ask for passthrough.
+	ReasonPassthroughOff = "passthrough off"
 )
 
 // Verdict says whether one kind of stream can pass through untouched.
@@ -92,24 +94,63 @@ func Copyable(job Job, info probe.Info, avail EncoderSet, extra ...probe.Info) (
 	if !p.HasVideo() && len(lay.Audio) == 0 {
 		return Copy{}, fmt.Errorf("%w: %s", ErrNoAudio, job.Input)
 	}
+	return verdicts(box, p.Target, info, lay)
+}
+
+// verdicts returns the passthrough verdict for each kind of stream in the output of target t,
+// with the streams of info laid out as lay.
+func verdicts(box format.Container, t format.Target, info probe.Info, lay layout) (Copy, error) {
 	var c Copy
-	if p.HasVideo() {
-		v, err := videoVerdict(box, p.Target, info, lay.Burn)
+	if t.HasVideo() {
+		v, err := videoVerdict(box, t, info, lay.Burn)
 		if err != nil {
 			return Copy{}, err
 		}
 		c.Video = &v
 	}
-	if p.HasAudio() && len(lay.Audio) != 0 {
+	if t.HasAudio() && len(lay.Audio) != 0 {
 		a := Verdict{Copy: true}
 		for _, out := range lay.Audio {
-			if a = audioVerdict(box, p.Target, out.Source); !a.Copy {
+			if a = audioVerdict(box, t, out.Source); !a.Copy {
 				break
 			}
 		}
 		c.Audio = &a
 	}
 	return c, nil
+}
+
+// passthrough returns t with each kind of stream that c says qualifies set to copy. Audio is
+// copied only when every track qualifies, as its verdict covers them all.
+func passthrough(t format.Target, c Copy) format.Target {
+	if c.Video != nil && c.Video.Copy {
+		t.Video = format.Video{Codec: format.Copy}
+	}
+	if c.Audio != nil && c.Audio.Copy {
+		t.Audio = format.Audio{Codec: format.Copy}
+	}
+	return t
+}
+
+// copied returns what a plan of target t does with each kind of stream, given the verdicts c
+// for the job's own target. A stream set to copy is copied. A stream that qualifies but is
+// encoded anyway carries ReasonPassthroughOff.
+func copied(t format.Target, c Copy) Copy {
+	return Copy{Video: did(t.Video.Codec, c.Video), Audio: did(t.Audio.Codec, c.Audio)}
+}
+
+// did returns what a plan does with a stream of the given target codec and verdict v, nil when
+// the output has no such stream.
+func did(codec string, v *Verdict) *Verdict {
+	switch {
+	case v == nil:
+		return nil
+	case codec == format.Copy:
+		return &Verdict{Copy: true}
+	case v.Copy:
+		return &Verdict{Reason: ReasonPassthroughOff}
+	}
+	return &Verdict{Reason: v.Reason}
 }
 
 // videoVerdict says whether the first motion video stream of info, which the caller has checked

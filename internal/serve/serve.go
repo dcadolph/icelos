@@ -94,6 +94,8 @@ type Request struct {
 	Streams engine.Streams `json:"streams,omitzero"`
 	// SplitChapters makes add queue one job per chapter of the input.
 	SplitChapters bool `json:"splitChapters,omitempty"`
+	// Passthrough makes add and plan copy every stream that already matches the preset.
+	Passthrough bool `json:"passthrough,omitempty"`
 	// Job is the job ID to cancel.
 	Job string `json:"job,omitempty"`
 }
@@ -143,7 +145,9 @@ type Catalog struct {
 type Plan struct {
 	// Copy holds the passthrough verdict for each kind of output stream.
 	Copy engine.Copy `json:"copy"`
-	// Lossless is true when every output stream can pass through untouched.
+	// Copied records which kinds of output stream the conversion would copy.
+	Copied engine.Copy `json:"copied"`
+	// Lossless is true when the conversion would copy every output stream.
 	Lossless bool `json:"lossless"`
 	// Output is the path the conversion would write.
 	Output string `json:"output"`
@@ -411,7 +415,8 @@ func (s *Server) jobFor(req Request) (engine.Job, error) {
 	}
 	hw := req.Hardware == nil || *req.Hardware
 	return engine.Job{Input: req.Input, Output: req.Output, Preset: p, Hardware: hw,
-		Overwrite: req.Overwrite, Streams: req.Streams, SplitChapters: req.SplitChapters}, nil
+		Overwrite: req.Overwrite, Streams: req.Streams, SplitChapters: req.SplitChapters,
+		Passthrough: req.Passthrough}, nil
 }
 
 // plan probes job's input and external audio and returns what converting it would run. The
@@ -452,8 +457,8 @@ func (s *Server) plan(ctx context.Context, job engine.Job, outDir string) (Plan,
 	if err != nil {
 		return Plan{}, err
 	}
-	return Plan{Copy: c, Lossless: c.Lossless(), Output: dest, Passes: built.Passes,
-		Encoder: built.Encoder, Hardware: built.Hardware, Filters: built.Filters}, nil
+	return Plan{Copy: c, Copied: built.Copied, Lossless: built.Copied.Lossless(), Output: dest,
+		Passes: built.Passes, Encoder: built.Encoder, Hardware: built.Hardware, Filters: built.Filters}, nil
 }
 
 // presetFor returns the inline preset of an add request after validating it, or else the named
