@@ -1,0 +1,881 @@
+{
+  "apple-hevc-10bit-hlg-rotated.mov/apple": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "480x854",
+    "duration": "2.0"
+  },
+  "apple-hevc-10bit-hlg-rotated.mov/apple+passthrough": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "480x854",
+    "duration": "2.0",
+    "copied": [
+      "video",
+      "audio"
+    ]
+  },
+  "apple-hevc-10bit-hlg-rotated.mov/audio": {
+    "streams": [
+      "audio:aac"
+    ],
+    "duration": "2.0"
+  },
+  "apple-hevc-10bit-hlg-rotated.mov/compatible": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "480x854",
+    "duration": "2.0"
+  },
+  "apple-hevc-10bit-hlg-rotated.mov/mp3": {
+    "streams": [
+      "audio:mp3"
+    ],
+    "duration": "2.0"
+  },
+  "apple-hevc-10bit-hlg-rotated.mov/remux": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "480x854",
+    "duration": "2.0",
+    "copied": [
+      "video",
+      "audio"
+    ]
+  },
+  "apple-hevc-10bit-hlg-rotated.mov/target-size": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "480x854",
+    "duration": "2.0"
+  },
+  "apple-hevc-10bit-hlg-rotated.mov/tiny": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "480x854",
+    "duration": "2.0"
+  },
+  "apple-hevc-10bit-hlg-rotated.mov/web": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "480x854",
+    "duration": "2.0"
+  },
+  "apple-hevc-10bit-hlg-rotated.mov/web+passthrough": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "480x854",
+    "duration": "2.0",
+    "copied": [
+      "audio"
+    ]
+  },
+  "av1-aac.mp4/apple": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "av1-aac.mp4/apple+passthrough": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0",
+    "copied": [
+      "audio"
+    ]
+  },
+  "av1-aac.mp4/audio": {
+    "streams": [
+      "audio:aac"
+    ],
+    "duration": "2.0"
+  },
+  "av1-aac.mp4/compatible": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "av1-aac.mp4/mp3": {
+    "streams": [
+      "audio:mp3"
+    ],
+    "duration": "2.0"
+  },
+  "av1-aac.mp4/remux": {
+    "streams": [
+      "video:av1",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0",
+    "copied": [
+      "video",
+      "audio"
+    ]
+  },
+  "av1-aac.mp4/target-size": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "av1-aac.mp4/tiny": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "av1-aac.mp4/web": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "av1-aac.mp4/web+passthrough": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0",
+    "copied": [
+      "audio"
+    ]
+  },
+  "bbb-mpeg4-mp3.mov/apple": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "640x360",
+    "duration": "2.0"
+  },
+  "bbb-mpeg4-mp3.mov/apple+passthrough": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "640x360",
+    "duration": "2.0"
+  },
+  "bbb-mpeg4-mp3.mov/audio": {
+    "streams": [
+      "audio:aac"
+    ],
+    "duration": "2.0"
+  },
+  "bbb-mpeg4-mp3.mov/compatible": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "640x360",
+    "duration": "2.0"
+  },
+  "bbb-mpeg4-mp3.mov/mp3": {
+    "streams": [
+      "audio:mp3"
+    ],
+    "duration": "2.0"
+  },
+  "bbb-mpeg4-mp3.mov/remux": {
+    "streams": [
+      "video:mpeg4",
+      "audio:mp3"
+    ],
+    "display": "640x360",
+    "duration": "2.0",
+    "copied": [
+      "video",
+      "audio"
+    ]
+  },
+  "bbb-mpeg4-mp3.mov/target-size": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "640x360",
+    "duration": "2.0"
+  },
+  "bbb-mpeg4-mp3.mov/tiny": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "640x360",
+    "duration": "2.0"
+  },
+  "bbb-mpeg4-mp3.mov/web": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "640x360",
+    "duration": "2.0"
+  },
+  "bbb-mpeg4-mp3.mov/web+passthrough": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "640x360",
+    "duration": "2.0"
+  },
+  "bbb-vp9-opus.webm/apple": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "bbb-vp9-opus.webm/apple+passthrough": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "bbb-vp9-opus.webm/audio": {
+    "streams": [
+      "audio:aac"
+    ],
+    "duration": "2.0"
+  },
+  "bbb-vp9-opus.webm/compatible": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "bbb-vp9-opus.webm/mp3": {
+    "streams": [
+      "audio:mp3"
+    ],
+    "duration": "2.0"
+  },
+  "bbb-vp9-opus.webm/remux": {
+    "streams": [
+      "video:vp9",
+      "audio:opus"
+    ],
+    "display": "854x480",
+    "duration": "2.0",
+    "copied": [
+      "video",
+      "audio"
+    ]
+  },
+  "bbb-vp9-opus.webm/target-size": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "bbb-vp9-opus.webm/tiny": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "bbb-vp9-opus.webm/web": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "bbb-vp9-opus.webm/web+passthrough": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "sintel-h264-ac3-5.1-subs-chapters.mkv/apple": {
+    "streams": [
+      "video:hevc",
+      "audio:aac",
+      "data:bin_data"
+    ],
+    "display": "1126x480",
+    "duration": "2.0",
+    "chapters": 2
+  },
+  "sintel-h264-ac3-5.1-subs-chapters.mkv/apple+passthrough": {
+    "streams": [
+      "video:hevc",
+      "audio:aac",
+      "data:bin_data"
+    ],
+    "display": "1126x480",
+    "duration": "2.0",
+    "chapters": 2
+  },
+  "sintel-h264-ac3-5.1-subs-chapters.mkv/audio": {
+    "streams": [
+      "audio:aac",
+      "data:bin_data"
+    ],
+    "duration": "2.0",
+    "chapters": 2
+  },
+  "sintel-h264-ac3-5.1-subs-chapters.mkv/compatible": {
+    "streams": [
+      "video:h264",
+      "audio:aac",
+      "data:bin_data"
+    ],
+    "display": "1126x480",
+    "duration": "2.0",
+    "chapters": 2
+  },
+  "sintel-h264-ac3-5.1-subs-chapters.mkv/mp3": {
+    "streams": [
+      "audio:mp3"
+    ],
+    "duration": "2.0",
+    "chapters": 2
+  },
+  "sintel-h264-ac3-5.1-subs-chapters.mkv/remux": {
+    "streams": [
+      "video:h264",
+      "audio:ac3",
+      "data:bin_data"
+    ],
+    "display": "1126x480",
+    "duration": "2.0",
+    "chapters": 2,
+    "copied": [
+      "video",
+      "audio"
+    ]
+  },
+  "sintel-h264-ac3-5.1-subs-chapters.mkv/target-size": {
+    "streams": [
+      "video:h264",
+      "audio:aac",
+      "data:bin_data"
+    ],
+    "display": "1126x480",
+    "duration": "2.0",
+    "chapters": 2
+  },
+  "sintel-h264-ac3-5.1-subs-chapters.mkv/tiny": {
+    "streams": [
+      "video:hevc",
+      "audio:aac",
+      "data:bin_data"
+    ],
+    "display": "1126x480",
+    "duration": "2.0",
+    "chapters": 2
+  },
+  "sintel-h264-ac3-5.1-subs-chapters.mkv/web": {
+    "streams": [
+      "video:h264",
+      "audio:aac",
+      "data:bin_data"
+    ],
+    "display": "1126x480",
+    "duration": "2.0",
+    "chapters": 2
+  },
+  "sintel-h264-ac3-5.1-subs-chapters.mkv/web+passthrough": {
+    "streams": [
+      "video:h264",
+      "audio:aac",
+      "data:bin_data"
+    ],
+    "display": "1126x480",
+    "duration": "2.0",
+    "chapters": 2,
+    "copied": [
+      "video"
+    ]
+  },
+  "sintel-music-fx.flac/apple": {
+    "error": "ErrNoVideo"
+  },
+  "sintel-music-fx.flac/apple+passthrough": {
+    "error": "ErrNoVideo"
+  },
+  "sintel-music-fx.flac/audio": {
+    "streams": [
+      "audio:aac"
+    ],
+    "duration": "3.0"
+  },
+  "sintel-music-fx.flac/compatible": {
+    "error": "ErrNoVideo"
+  },
+  "sintel-music-fx.flac/mp3": {
+    "streams": [
+      "audio:mp3"
+    ],
+    "duration": "3.0"
+  },
+  "sintel-music-fx.flac/remux": {
+    "error": "ErrNoVideo"
+  },
+  "sintel-music-fx.flac/target-size": {
+    "error": "ErrNoVideo"
+  },
+  "sintel-music-fx.flac/tiny": {
+    "error": "ErrNoVideo"
+  },
+  "sintel-music-fx.flac/web": {
+    "error": "ErrNoVideo"
+  },
+  "sintel-music-fx.flac/web+passthrough": {
+    "error": "ErrNoVideo"
+  },
+  "sintel-trailer-h264-aac-2subs.mkv/apple": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "848x360",
+    "duration": "5.8"
+  },
+  "sintel-trailer-h264-aac-2subs.mkv/apple+passthrough": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "848x360",
+    "duration": "5.8",
+    "copied": [
+      "audio"
+    ]
+  },
+  "sintel-trailer-h264-aac-2subs.mkv/audio": {
+    "streams": [
+      "audio:aac"
+    ],
+    "duration": "5.7"
+  },
+  "sintel-trailer-h264-aac-2subs.mkv/compatible": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "848x360",
+    "duration": "5.8"
+  },
+  "sintel-trailer-h264-aac-2subs.mkv/mp3": {
+    "streams": [
+      "audio:mp3"
+    ],
+    "duration": "5.6"
+  },
+  "sintel-trailer-h264-aac-2subs.mkv/remux": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "848x360",
+    "duration": "5.7",
+    "copied": [
+      "video",
+      "audio"
+    ]
+  },
+  "sintel-trailer-h264-aac-2subs.mkv/target-size": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "848x360",
+    "duration": "5.8"
+  },
+  "sintel-trailer-h264-aac-2subs.mkv/tiny": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "848x360",
+    "duration": "5.8"
+  },
+  "sintel-trailer-h264-aac-2subs.mkv/web": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "848x360",
+    "duration": "5.8"
+  },
+  "sintel-trailer-h264-aac-2subs.mkv/web+passthrough": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "848x360",
+    "duration": "5.7",
+    "copied": [
+      "video",
+      "audio"
+    ]
+  },
+  "sintel-trailer-h264-aac.mp4/apple": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.1"
+  },
+  "sintel-trailer-h264-aac.mp4/apple+passthrough": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.1",
+    "copied": [
+      "audio"
+    ]
+  },
+  "sintel-trailer-h264-aac.mp4/audio": {
+    "streams": [
+      "audio:aac"
+    ],
+    "duration": "2.0"
+  },
+  "sintel-trailer-h264-aac.mp4/compatible": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.1"
+  },
+  "sintel-trailer-h264-aac.mp4/mp3": {
+    "streams": [
+      "audio:mp3"
+    ],
+    "duration": "2.0"
+  },
+  "sintel-trailer-h264-aac.mp4/remux": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.1",
+    "copied": [
+      "video",
+      "audio"
+    ]
+  },
+  "sintel-trailer-h264-aac.mp4/target-size": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.1"
+  },
+  "sintel-trailer-h264-aac.mp4/tiny": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.1"
+  },
+  "sintel-trailer-h264-aac.mp4/web": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.1"
+  },
+  "sintel-trailer-h264-aac.mp4/web+passthrough": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.1",
+    "copied": [
+      "video",
+      "audio"
+    ]
+  },
+  "sintel-trailer-mpeg4-mp3.avi/apple": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "720x372",
+    "duration": "2.1"
+  },
+  "sintel-trailer-mpeg4-mp3.avi/apple+passthrough": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "720x372",
+    "duration": "2.1"
+  },
+  "sintel-trailer-mpeg4-mp3.avi/audio": {
+    "streams": [
+      "audio:aac"
+    ],
+    "duration": "2.0"
+  },
+  "sintel-trailer-mpeg4-mp3.avi/compatible": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "720x372",
+    "duration": "2.1"
+  },
+  "sintel-trailer-mpeg4-mp3.avi/mp3": {
+    "streams": [
+      "audio:mp3"
+    ],
+    "duration": "2.0"
+  },
+  "sintel-trailer-mpeg4-mp3.avi/remux": {
+    "streams": [
+      "video:mpeg4",
+      "audio:mp3"
+    ],
+    "display": "720x372",
+    "duration": "2.0",
+    "copied": [
+      "video",
+      "audio"
+    ]
+  },
+  "sintel-trailer-mpeg4-mp3.avi/target-size": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "720x372",
+    "duration": "2.1"
+  },
+  "sintel-trailer-mpeg4-mp3.avi/tiny": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "720x372",
+    "duration": "2.1"
+  },
+  "sintel-trailer-mpeg4-mp3.avi/web": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "720x372",
+    "duration": "2.1"
+  },
+  "sintel-trailer-mpeg4-mp3.avi/web+passthrough": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "720x372",
+    "duration": "2.1"
+  },
+  "sintel-trailer-theora-vorbis.ogv/apple": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "sintel-trailer-theora-vorbis.ogv/apple+passthrough": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "sintel-trailer-theora-vorbis.ogv/audio": {
+    "streams": [
+      "audio:aac"
+    ],
+    "duration": "2.0"
+  },
+  "sintel-trailer-theora-vorbis.ogv/compatible": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "sintel-trailer-theora-vorbis.ogv/mp3": {
+    "streams": [
+      "audio:mp3"
+    ],
+    "duration": "2.0"
+  },
+  "sintel-trailer-theora-vorbis.ogv/remux": {
+    "error": "ErrCopy"
+  },
+  "sintel-trailer-theora-vorbis.ogv/target-size": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "sintel-trailer-theora-vorbis.ogv/tiny": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "sintel-trailer-theora-vorbis.ogv/web": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "sintel-trailer-theora-vorbis.ogv/web+passthrough": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "854x480",
+    "duration": "2.0"
+  },
+  "tos-h264-mp3.mov/apple": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "1280x534",
+    "duration": "2.0"
+  },
+  "tos-h264-mp3.mov/apple+passthrough": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "1280x534",
+    "duration": "2.0"
+  },
+  "tos-h264-mp3.mov/audio": {
+    "streams": [
+      "audio:aac"
+    ],
+    "duration": "2.0"
+  },
+  "tos-h264-mp3.mov/compatible": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "1280x534",
+    "duration": "2.0"
+  },
+  "tos-h264-mp3.mov/mp3": {
+    "streams": [
+      "audio:mp3"
+    ],
+    "duration": "2.0"
+  },
+  "tos-h264-mp3.mov/remux": {
+    "streams": [
+      "video:h264",
+      "audio:mp3"
+    ],
+    "display": "1280x534",
+    "duration": "2.1",
+    "copied": [
+      "video",
+      "audio"
+    ]
+  },
+  "tos-h264-mp3.mov/target-size": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "1280x534",
+    "duration": "2.0"
+  },
+  "tos-h264-mp3.mov/tiny": {
+    "streams": [
+      "video:hevc",
+      "audio:aac"
+    ],
+    "display": "1280x534",
+    "duration": "2.0"
+  },
+  "tos-h264-mp3.mov/web": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "1280x534",
+    "duration": "2.0"
+  },
+  "tos-h264-mp3.mov/web+passthrough": {
+    "streams": [
+      "video:h264",
+      "audio:aac"
+    ],
+    "display": "1280x534",
+    "duration": "2.1",
+    "copied": [
+      "video"
+    ]
+  }
+}
