@@ -8,7 +8,19 @@ Icelos takes video and audio files in and hands them back in a new format or a s
 
 ## Status
 
-Early and unreleased. The converter engine, the command line tool, and the Mac app work from source, with presets for common targets, target-size compression, and a job queue. There are no signed builds yet. The goals below describe where the project is headed, not what works today.
+Early and unreleased. The converter engine, the command line tool, and the Mac app work from source. There are no signed builds yet. The goals below describe where the project is headed, not what works today.
+
+What works today:
+
+- A format catalog of video and audio containers and codecs, from MP4, MOV, and MKV to MXF, DV, and AMV, with the rules each one follows built into the engine, so the app, the command line, and the backend refuse the same settings.
+- Presets for common targets, target-size compression in two passes, and custom presets saved as files that the app and the command line share.
+- An inspector in the app for every setting a format takes: codec, resolution, frame rate, rate control, bitrate, profile, level, sample rate, channels, and bit depth. Any file can carry its own settings.
+- Stream selection: keep any of a file's audio tracks, add up to six audio files as extra tracks, keep, pick, or burn in subtitles, add a subtitle file, drop chapters or metadata, and split a file into one output per chapter.
+- Passthrough: a stream that already matches the target is copied instead of encoded, and the app marks a file LOSSLESS when nothing is re-encoded.
+- Size estimates on each file before it converts, and the Apple media engine for H.264, HEVC, and ProRes.
+- Twelve themes with light and dark appearance, and a Settings window for the default destination, the media engine, and a CPU limit.
+
+Homebrew's FFmpeg lacks a few encoders, so Theora (OGV), Vorbis (OGG audio), and AMR-NB show as unavailable, and burning in text subtitles needs FFmpeg built with libass. A bundled FFmpeg build will cover them.
 
 ## Build from source
 
@@ -22,6 +34,16 @@ mac/bundle.sh
 ```
 
 `mac/bundle.sh` writes an unsigned `Icelos.app` to `mac/.build/`.
+
+`go run . encoders` shows which catalog codecs the local FFmpeg can write. `convert` takes the preset as a starting point and flags on top of it:
+
+```sh
+go run . convert --container mkv --resolution 720p --audio-tracks all --subtitles keep input.mov
+go run . convert --preset web --passthrough --split-chapters lecture.mp4
+go run . convert --video-codec hevc --video-bitrate 6M --audio-bitrate 160k --threads 4 input.mov
+```
+
+Run `go run . convert --help` for every flag.
 
 ## Goals
 
