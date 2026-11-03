@@ -1,10 +1,10 @@
-<p align="center"><img src="assets/icon.png" width="160" alt="Icelos"></p>
+<p align="center"><img src="assets/banner.png" alt="icelos: Form is never final."></p>
 
 <h1 align="center">Icelos</h1>
 
-A free, open source video converter for Mac.
+A free, open source video and audio converter for Mac.
 
-Icelos takes video files in and hands them back in a new format or a smaller size. It runs on your machine, needs no account, and shows no upsells or trial limits.
+Icelos takes video and audio files in and hands them back in a new format or a smaller size. It runs on your machine, needs no account, and shows no upsells or trial limits.
 
 ## Status
 
