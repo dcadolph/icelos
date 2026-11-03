@@ -18,6 +18,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/dcadolph/icelos/internal/engine"
+	"github.com/dcadolph/icelos/internal/format"
 	"github.com/dcadolph/icelos/internal/probe"
 	"github.com/dcadolph/icelos/internal/queue"
 )
@@ -147,6 +148,11 @@ func TestSession(t *testing.T) { //nolint:funlen // Test function.
 		`{"id":"a4","op":"add","input":"`+clip+`","preset":"web","hardware":false}`,
 		`{"id":"a5","op":"add","input":"`+clip+`","preset":"target-size","size":"8MB"}`,
 		`{"id":"x","op":"cancel","job":"99"}`,
+		`{"id":"cat","op":"catalog"}`,
+		`{"id":"b0","op":"add","input":"`+clip+`","presetBody":{"id":"mine","name":"Mine","container":"mkv",`+
+			`"video":{"codec":"hevc","rateControl":"quality","quality":1},"audio":{"codec":"opus","bitrate":128000}}}`,
+		`{"id":"b1","op":"add","input":"`+clip+`","preset":"web","presetBody":{"id":"bad","container":"mp4",`+
+			`"video":{"codec":"vp8"}}}`,
 	)
 	tests := []struct {
 		Reply     string
@@ -165,12 +171,16 @@ func TestSession(t *testing.T) { //nolint:funlen // Test function.
 		{Reply: "a4", WantType: OpAdd},                                                         // Test 9: Added.
 		{Reply: "a5", WantType: OpAdd},                                                         // Test 10: Added with size.
 		{Reply: "x", WantType: TypeError, WantError: "unknown job: 99"},                        // Test 11: Cancel unknown.
+		{Reply: "cat", WantType: OpCatalog},                                                    // Test 12: Catalog.
+		{Reply: "b0", WantType: OpAdd},                                                         // Test 13: Inline preset.
+		{Reply: "b1", WantType: TypeError, WantError: "vp8"},                                   // Test 14: Bad inline preset.
 	}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
 			got := waitFor(t, out, byReply(test.Reply))
-			if diff := cmp.Diff([2]string{test.WantType, test.WantError}, [2]string{got.Type, got.Error}); diff != "" {
-				t.Errorf("mismatch (-want +got):\n%s", diff)
+			if got.Type != test.WantType || !strings.Contains(got.Error, test.WantError) ||
+				(test.WantError == "") != (got.Error == "") {
+				t.Errorf("reply = %q %q, want %q containing %q", got.Type, got.Error, test.WantType, test.WantError)
 			}
 		})
 	}
@@ -184,6 +194,14 @@ func TestSession(t *testing.T) { //nolint:funlen // Test function.
 	if p := waitFor(t, out, byReply("p")); len(p.Presets) == 0 {
 		t.Error("no presets")
 	}
+	if c := waitFor(t, out, byReply("cat")).Catalog; c == nil || len(c.Containers) == 0 ||
+		len(c.Codecs) == 0 || len(c.Domains.Resolutions) == 0 {
+		t.Errorf("catalog = %+v", c)
+	}
+	if b := waitFor(t, out, byReply("b0")); b.Status == nil || b.Status.Job.Preset.ID != "mine" ||
+		b.Status.Job.Preset.Video.Codec != "hevc" || filepath.Ext(b.Status.Job.Output) != ".mkv" {
+		t.Errorf("inline preset job = %+v", b.Status)
+	}
 	added := waitFor(t, out, byReply("a4"))
 	if added.Status.Job.Hardware || filepath.Base(added.Status.Job.Output) != "clip.mp4" {
 		t.Errorf("added job = %+v", added.Status.Job)
@@ -194,18 +212,19 @@ func TestSession(t *testing.T) { //nolint:funlen // Test function.
 	}
 	waitFor(t, out, jobState("1", queue.StateDone))
 	waitFor(t, out, jobState("2", queue.StateDone))
+	waitFor(t, out, jobState("3", queue.StateDone))
 
 	testSend(t, in, `{"id":"b","op":"add","input":"`+block+`","preset":"web"}`)
-	waitFor(t, out, jobState("3", queue.StateRunning))
+	waitFor(t, out, jobState("4", queue.StateRunning))
 	testSend(t, in, `{"id":"l","op":"list"}`)
-	if l := waitFor(t, out, byReply("l")); len(l.Jobs) != 3 {
-		t.Errorf("list = %d jobs, want 3", len(l.Jobs))
+	if l := waitFor(t, out, byReply("l")); len(l.Jobs) != 4 {
+		t.Errorf("list = %d jobs, want 4", len(l.Jobs))
 	}
-	testSend(t, in, `{"id":"k","op":"cancel","job":"3"}`)
+	testSend(t, in, `{"id":"k","op":"cancel","job":"4"}`)
 	if k := waitFor(t, out, byReply("k")); k.Type != TypeOK {
 		t.Errorf("cancel reply = %+v", k)
 	}
-	waitFor(t, out, jobState("3", queue.StateCanceled))
+	waitFor(t, out, jobState("4", queue.StateCanceled))
 	testSend(t, in, `{"id":"cl","op":"clear"}`, `{"id":"l2","op":"list"}`)
 	if l := waitFor(t, out, byReply("l2")); len(l.Jobs) != 0 {
 		t.Errorf("after clear, list = %d jobs", len(l.Jobs))
@@ -274,5 +293,60 @@ func TestNewPanics(t *testing.T) {
 			}()
 			New(test.W, test.Cfg)
 		})
+	}
+}
+
+func TestNewCatalog(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		In            engine.EncoderSet
+		WantAvailable map[string]bool
+	}{{ // Test 0: libx265 makes HEVC available, and theora has no encoder icelos drives.
+		In:            engine.EncoderSet{"libx265": true, "libtheora": true, "aac": true},
+		WantAvailable: map[string]bool{"hevc": true, "theora": false, "aac": true, "h264": false},
+	}, { // Test 1: Without libx265 HEVC is unavailable.
+		In:            engine.EncoderSet{"libtheora": true, "aac": true},
+		WantAvailable: map[string]bool{"hevc": false, "theora": false, "aac": true, "h264": false},
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			c := NewCatalog(test.In)
+			got := map[string]bool{}
+			for _, codec := range c.Codecs {
+				if _, ok := test.WantAvailable[codec.ID]; ok {
+					got[codec.ID] = codec.Available
+				}
+			}
+			if diff := cmp.Diff(test.WantAvailable, got); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestCatalogFitsOneLine(t *testing.T) {
+	t.Parallel()
+	all := engine.EncoderSet{}
+	for _, c := range format.Codecs() {
+		for _, e := range c.Encoders {
+			all[e.Name] = true
+		}
+	}
+	c := NewCatalog(all)
+	b, err := json.Marshal(Message{Type: OpCatalog, Reply: "id", Catalog: &c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("catalog message is %d bytes", len(b))
+	if len(b) >= maxLine {
+		t.Errorf("catalog message is %d bytes, over the %d byte line limit", len(b), maxLine)
+	}
+	var back Message
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatal(err)
+	}
+	if diff := cmp.Diff(c, *back.Catalog); diff != "" {
+		t.Errorf("round trip mismatch (-want +got):\n%s", diff)
 	}
 }

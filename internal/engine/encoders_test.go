@@ -6,6 +6,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+
+	"github.com/dcadolph/icelos/internal/format"
 )
 
 func TestParseEncoders(t *testing.T) {
@@ -29,6 +31,56 @@ func TestParseEncoders(t *testing.T) {
 			t.Parallel()
 			got := ParseEncoders([]byte(test.In))
 			if diff := cmp.Diff(test.WantSet, got, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestUsable(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		WantNames []string
+		In        EncoderSet
+	}{{ // Test 0: Only catalog encoders with a builder count.
+		In:        EncoderSet{"libx264": true, "png": true, "aac_at": true, "libtheora": true},
+		WantNames: []string{"aac_at", "libx264"},
+	}, { // Test 1: Empty set.
+		In: EncoderSet{},
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			if diff := cmp.Diff(test.WantNames, Usable(test.In), cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestAvailable(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		Codec      string
+		In         EncoderSet
+		WantResult bool
+	}{{ // Test 0: Software encoder present.
+		Codec: "hevc", In: EncoderSet{"libx265": true}, WantResult: true,
+	}, { // Test 1: Hardware encoder alone is enough.
+		Codec: "hevc", In: EncoderSet{"hevc_videotoolbox": true}, WantResult: true,
+	}, { // Test 2: No encoder for the codec.
+		Codec: "hevc", In: EncoderSet{"libx264": true},
+	}, { // Test 3: Present in ffmpeg but icelos has no builder.
+		Codec: "theora", In: EncoderSet{"libtheora": true},
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			codec, err := format.CodecByID(test.Codec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(test.WantResult, Available(codec, test.In)); diff != "" {
 				t.Errorf("mismatch (-want +got):\n%s", diff)
 			}
 		})

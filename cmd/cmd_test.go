@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/dcadolph/icelos/cmd/config"
+	"github.com/dcadolph/icelos/internal/format"
 	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/queue"
 	"github.com/dcadolph/icelos/internal/serve"
@@ -172,9 +173,22 @@ func TestProbeAndEncoders(t *testing.T) { //nolint:paralleltest // Flags are pro
 	if err := json.Unmarshal([]byte(out), &rep); err != nil {
 		t.Fatal(err)
 	}
-	want := encoderReport{FFmpeg: rep.FFmpeg, Hardware: []string{"h264_videotoolbox"}, Software: []string{"aac", "libx264"}}
+	want := encoderReport{FFmpeg: rep.FFmpeg, Hardware: []string{"h264_videotoolbox"},
+		Software: []string{"aac", "libx264"}, Codecs: rep.Codecs}
 	if diff := cmp.Diff(want, rep); diff != "" {
 		t.Errorf("mismatch (-want +got):\n%s", diff)
+	}
+	avail := map[string]bool{}
+	for _, c := range rep.Codecs {
+		avail[c.ID] = c.Available
+	}
+	if diff := cmp.Diff(map[string]bool{"h264": true, "aac": true, "hevc": false, "theora": false},
+		map[string]bool{"h264": avail["h264"], "aac": avail["aac"], "hevc": avail["hevc"],
+			"theora": avail["theora"]}); diff != "" {
+		t.Errorf("codec availability mismatch (-want +got):\n%s", diff)
+	}
+	if len(rep.Codecs) != len(format.Codecs()) {
+		t.Errorf("report has %d codecs, catalog has %d", len(rep.Codecs), len(format.Codecs()))
 	}
 }
 

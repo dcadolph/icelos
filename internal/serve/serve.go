@@ -11,11 +11,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"slices"
 	"strings"
 	"sync"
 
 	"github.com/dcadolph/icelos/internal/engine"
+	"github.com/dcadolph/icelos/internal/format"
 	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/probe"
 	"github.com/dcadolph/icelos/internal/queue"
@@ -28,6 +28,8 @@ const maxLine = 1 << 20
 const (
 	// OpCapabilities asks for the version and the encoders ffmpeg offers.
 	OpCapabilities = "capabilities"
+	// OpCatalog asks for the containers, the codecs this ffmpeg can encode, and the option lists.
+	OpCatalog = "catalog"
 	// OpPresets asks for the built-in presets.
 	OpPresets = "presets"
 	// OpProbe asks for the metadata of Request.Path.
@@ -66,6 +68,9 @@ type Request struct {
 	Input string `json:"input,omitempty"`
 	// Preset is the preset ID for add.
 	Preset string `json:"preset,omitempty"`
+	// PresetBody is a whole preset for add, used instead of Preset when set, so a file can carry
+	// settings that no saved preset holds.
+	PresetBody *preset.Preset `json:"presetBody,omitempty"`
 	// Size is the target size for the target-size preset, e.g. "25MB".
 	Size string `json:"size,omitempty"`
 	// Hardware prefers VideoToolbox. Absent means true.
@@ -94,12 +99,42 @@ type Message struct {
 	Encoders []string `json:"encoders,omitempty"`
 	// Presets lists the built-in presets.
 	Presets []preset.Preset `json:"presets,omitempty"`
+	// Catalog is the format catalog with codec availability.
+	Catalog *Catalog `json:"catalog,omitempty"`
 	// Info is the probe result.
 	Info *probe.Info `json:"info,omitempty"`
 	// Status is one job snapshot.
 	Status *queue.Status `json:"status,omitempty"`
 	// Jobs lists every job.
 	Jobs []queue.Status `json:"jobs,omitempty"`
+}
+
+// Catalog is the format catalog as this ffmpeg build sees it.
+type Catalog struct {
+	// Containers lists every output container in catalog order.
+	Containers []format.Container `json:"containers"`
+	// Codecs lists every codec in catalog order with its availability.
+	Codecs []CatalogCodec `json:"codecs"`
+	// Domains are the value lists the settings dialog offers.
+	Domains format.Domains `json:"domains"`
+}
+
+// CatalogCodec is one catalog codec and whether it can be encoded here.
+type CatalogCodec struct {
+	format.Codec
+	// Available is true when ffmpeg offers an encoder for the codec that icelos can drive.
+	Available bool `json:"available"`
+}
+
+// NewCatalog returns the format catalog with each codec marked available or not against set.
+func NewCatalog(set engine.EncoderSet) Catalog {
+	codecs := format.Codecs()
+	out := Catalog{Containers: format.Containers(), Codecs: make([]CatalogCodec, len(codecs)),
+		Domains: format.Options()}
+	for i, c := range codecs {
+		out.Codecs[i] = CatalogCodec{Codec: c, Available: engine.Available(c, set)}
+	}
+	return out
 }
 
 // EncodersFunc reports the encoders ffmpeg offers.
@@ -197,7 +232,20 @@ func (s *Server) handle(ctx context.Context, req Request, wg *sync.WaitGroup) {
 				s.fail(req.ID, err)
 				return
 			}
-			s.send(Message{Type: req.Op, Reply: req.ID, Version: s.cfg.Version, Encoders: usable(set)})
+			s.send(Message{Type: req.Op, Reply: req.ID, Version: s.cfg.Version,
+				Encoders: engine.Usable(set)})
+		}()
+	case OpCatalog:
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			set, err := s.cfg.Encoders(ctx)
+			if err != nil {
+				s.fail(req.ID, err)
+				return
+			}
+			c := NewCatalog(set)
+			s.send(Message{Type: req.Op, Reply: req.ID, Catalog: &c})
 		}()
 	case OpPresets:
 		s.send(Message{Type: req.Op, Reply: req.ID, Presets: preset.All()})
@@ -245,7 +293,7 @@ func jobFor(req Request) (engine.Job, error) {
 	if req.Input == "" {
 		return engine.Job{}, fmt.Errorf("%w: input required", ErrRequest)
 	}
-	p, err := preset.Lookup(req.Preset)
+	p, err := presetFor(req)
 	if err != nil {
 		return engine.Job{}, err
 	}
@@ -264,18 +312,15 @@ func jobFor(req Request) (engine.Job, error) {
 		Overwrite: req.Overwrite}, nil
 }
 
-// usable returns the sorted encoder names from set that icelos knows how to drive.
-func usable(set engine.EncoderSet) []string {
-	known := []string{"libx264", "libx265", "h264_videotoolbox", "hevc_videotoolbox", "aac",
-		"aac_at", "libmp3lame"}
-	var out []string
-	for _, name := range known {
-		if set.Has(name) {
-			out = append(out, name)
-		}
+// presetFor returns the inline preset of an add request after validating it, or the named one.
+func presetFor(req Request) (preset.Preset, error) {
+	if req.PresetBody == nil {
+		return preset.Lookup(req.Preset)
 	}
-	slices.Sort(out)
-	return out
+	if err := req.PresetBody.Validate(); err != nil {
+		return preset.Preset{}, err
+	}
+	return *req.PresetBody, nil
 }
 
 // fail sends an error reply.
