@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -170,15 +171,18 @@ func (f *FFmpeg) Encode(ctx context.Context, job Job, report ReportFunc) error {
 		return err
 	}
 	span := job.Range.Span(info.Duration)
-	err = f.run(ctx, plan, span, report)
+	err = f.run(ctx, plan, 0, span, report)
 	if err != nil && plan.Hardware && ctx.Err() == nil {
 		job.Hardware = false
 		if plan, err = Build(job, info, avail, partial, filepath.Join(work, "pass"), extra...); err != nil {
 			return err
 		}
-		err = f.run(ctx, plan, span, report)
+		err = f.run(ctx, plan, 0, span, report)
 	}
 	if err != nil {
+		return err
+	}
+	if err := f.fit(ctx, plan, partial, span, report); err != nil {
 		return err
 	}
 	if err := os.Rename(partial, out); err != nil {
@@ -187,10 +191,53 @@ func (f *FFmpeg) Encode(ctx context.Context, job Job, report ReportFunc) error {
 	return nil
 }
 
-// run executes every pass of plan in order, reporting overall progress against dur.
-func (f *FFmpeg) run(ctx context.Context, plan Plan, dur time.Duration, report ReportFunc) error {
+// fit checks a target-size output at partial against its limit. On an overshoot it reruns the
+// last pass once at the bitrate plan.Fit scales from the measured size, and returns
+// ErrTargetMissed if the output still lands over. Plans without a Fit return nil.
+func (f *FFmpeg) fit(ctx context.Context, plan Plan, partial string, dur time.Duration, report ReportFunc) error {
+	if plan.Fit == nil {
+		return nil
+	}
+	size, err := fileSize(partial)
+	if err != nil || size <= plan.Fit.Target {
+		return err
+	}
+	bitrate, err := plan.Fit.Retry(size)
+	if err != nil {
+		return err
+	}
+	retry := plan
+	retry.Passes = append(slices.Clone(plan.Passes), plan.Fit.Pass(bitrate))
+	if err := f.run(ctx, retry, len(plan.Passes), dur, report); err != nil {
+		return err
+	}
+	if size, err = fileSize(partial); err != nil {
+		return err
+	}
+	if size > plan.Fit.Target {
+		return fmt.Errorf("%w: %d bytes over the %d byte limit", ErrTargetMissed, size,
+			plan.Fit.Target)
+	}
+	return nil
+}
+
+// fileSize returns the size of the file at path in bytes.
+func fileSize(path string) (int64, error) {
+	st, err := os.Stat(path)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %w", ErrOutput, err)
+	}
+	return st.Size(), nil
+}
+
+// run executes the passes of plan in order from index from, reporting overall progress against
+// dur.
+func (f *FFmpeg) run(ctx context.Context, plan Plan, from int, dur time.Duration, report ReportFunc) error {
 	passes := len(plan.Passes)
 	for i, args := range plan.Passes {
+		if i < from {
+			continue
+		}
 		base := Progress{Percent: float64(i) / float64(passes), Pass: i + 1, Passes: passes,
 			Encoder: plan.Encoder, Hardware: plan.Hardware}
 		report(base)

@@ -219,7 +219,90 @@ func TestBuild(t *testing.T) { //nolint:funlen // Test function.
 				t.Fatalf("error = %v, want %v", err, test.Want)
 			}
 			want := Plan{Passes: test.WantPasses, Encoder: test.WantEncoder, Hardware: test.WantHardware}
-			if diff := cmp.Diff(want, got, cmpopts.IgnoreFields(Plan{}, "Copied")); diff != "" {
+			if diff := cmp.Diff(want, got, cmpopts.IgnoreFields(Plan{}, "Copied", "Fit")); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestBuildFit(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		Preset         string
+		TargetBytes    int64
+		WantFit        bool
+		WantBitrate    int
+		WantAudioBytes int64
+	}{{ // Test 0: Target size carries a fit at the planned bitrate with stereo AAC over 10 s.
+		Preset: preset.TargetSizeID, TargetBytes: 10_000_000, WantFit: true, WantBitrate: 7_632_000,
+		WantAudioBytes: 160_000,
+	}, { // Test 1: A quality preset has no fit.
+		Preset: "web",
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			p := testPreset(t, test.Preset)
+			if test.TargetBytes != 0 {
+				p = p.WithTargetSize(test.TargetBytes)
+			}
+			job := Job{Input: "in.mov", Output: "out.mp4", Preset: p}
+			got, err := Build(job, testInfo(), testAvail(), "out.mp4", "plog")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got.Fit != nil) != test.WantFit {
+				t.Fatalf("fit = %v, want fit %v", got.Fit, test.WantFit)
+			}
+			if got.Fit == nil {
+				return
+			}
+			if diff := cmp.Diff(test.WantBitrate, got.Fit.Bitrate); diff != "" {
+				t.Errorf("bitrate mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(test.WantAudioBytes, got.Fit.AudioBytes); diff != "" {
+				t.Errorf("audio bytes mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(got.Passes[1], got.Fit.Pass(got.Fit.Bitrate)); diff != "" {
+				t.Errorf("rebuilt last pass mismatch (-want +got):\n%s", diff)
+			}
+			want := slices.Clone(got.Passes[1])
+			want[slices.Index(want, "-b:v")+1] = "5000000"
+			if diff := cmp.Diff(want, got.Fit.Pass(5_000_000)); diff != "" {
+				t.Errorf("retry pass mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestFitRetry(t *testing.T) {
+	t.Parallel()
+	fit := Fit{Target: 200_000, Bitrate: 616_960, AudioBytes: 33_333}
+	tests := []struct {
+		Want        error
+		Fit         Fit
+		Actual      int64
+		WantBitrate int
+	}{{ // Test 0: The video share is scaled by its miss, aimed inside the headroom.
+		Fit: fit, Actual: 220_709, WantBitrate: 529_017,
+	}, { // Test 1: Audio alone fills the limit.
+		Fit: Fit{Target: 200_000, Bitrate: 500_000, AudioBytes: 200_000}, Actual: 230_000,
+		Want: ErrTargetTooSmall,
+	}, { // Test 2: The scaled bitrate falls under the floor.
+		Fit: Fit{Target: 200_000, Bitrate: 70_000, AudioBytes: 33_333}, Actual: 2_000_000,
+		Want: ErrTargetTooSmall,
+	}, { // Test 3: An output no bigger than its audio share.
+		Fit: fit, Actual: 33_333, Want: ErrTargetTooSmall,
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			got, err := test.Fit.Retry(test.Actual)
+			if !errors.Is(err, test.Want) {
+				t.Fatalf("error = %v, want %v", err, test.Want)
+			}
+			if diff := cmp.Diff(test.WantBitrate, got); diff != "" {
 				t.Errorf("mismatch (-want +got):\n%s", diff)
 			}
 		})

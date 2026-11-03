@@ -26,6 +26,38 @@ type Plan struct {
 	Filters []string
 	// Copied records which kinds of stream the plan copies instead of encoding.
 	Copied Copy
+	// Fit is how a target-size plan reruns its last pass when the output lands over the limit,
+	// nil for every other plan.
+	Fit *Fit
+}
+
+// Fit holds what a target-size plan needs to rerun its last pass at a lower bitrate.
+type Fit struct {
+	// Target is the size limit in bytes.
+	Target int64
+	// Bitrate is the video bitrate in bits per second the last pass aims at.
+	Bitrate int
+	// AudioBytes is the share of the output the audio tracks take, in bytes.
+	AudioBytes int64
+	// Pass returns the last pass's arguments at a video bitrate in bits per second.
+	Pass func(bitrate int) []string
+}
+
+// Retry returns the video bitrate for rerunning the last pass after it wrote actual bytes. The
+// bitrate is scaled by how far the video share missed, aimed inside the same headroom the first
+// pass used. Audio bytes do not move with the video bitrate, so they are left out of the ratio.
+func (f Fit) Retry(actual int64) (int, error) {
+	aim := float64(f.Target)*muxOverhead - float64(f.AudioBytes)
+	over := float64(actual - f.AudioBytes)
+	if aim <= 0 || over <= 0 {
+		return 0, fmt.Errorf("%w: %d bytes leaves no room for video", ErrTargetTooSmall, f.Target)
+	}
+	bitrate := int(float64(f.Bitrate) * aim / over)
+	if bitrate < minVideoBitrate {
+		return 0, fmt.Errorf("%w: %d bytes leaves %d bps for video", ErrTargetTooSmall, f.Target,
+			bitrate)
+	}
+	return bitrate, nil
 }
 
 // Bitrate budget for target-size encodes.
@@ -159,23 +191,28 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //n
 		return plan, nil
 	}
 
+	audioBps := p.Audio.Bitrate * len(lay.Audio)
+	span := job.Range.Span(info.Duration)
 	if p.TargetBytes > 0 {
-		audioBps := 0
-		if len(lay.Audio) != 0 {
-			audioBps = p.Audio.Bitrate * len(lay.Audio)
-		}
-		span := job.Range.Span(info.Duration)
 		if spec.Bitrate, err = TargetVideoBitrate(p.TargetBytes, span, audioBps); err != nil {
 			return Plan{}, err
 		}
 	}
-	pass := func(n int) []string {
-		spec.Pass = n
-		return slices.Concat(vplan.Head, vplan.Encoder.Args(spec))
+	pass := func(n, bitrate int) []string {
+		s := spec
+		s.Pass, s.Bitrate = n, bitrate
+		return slices.Concat(vplan.Head, vplan.Encoder.Args(s))
 	}
-	first := slices.Concat(head, mapVideo, pass(1), threads, []string{"-an", "-f", "null", os.DevNull})
-	second := slices.Concat(final, mapVideo, pass(2), mapAudio, audioArgs, tail)
-	plan.Passes = [][]string{first, second}
+	last := func(bitrate int) []string {
+		return slices.Concat(final, mapVideo, pass(2, bitrate), mapAudio, audioArgs, tail)
+	}
+	first := slices.Concat(head, mapVideo, pass(1, spec.Bitrate), threads,
+		[]string{"-an", "-f", "null", os.DevNull})
+	plan.Passes = [][]string{first, last(spec.Bitrate)}
+	if p.TargetBytes > 0 {
+		plan.Fit = &Fit{Target: p.TargetBytes, Bitrate: spec.Bitrate,
+			AudioBytes: int64(float64(audioBps) * span.Seconds() / 8), Pass: last}
+	}
 	return plan, nil
 }
 
