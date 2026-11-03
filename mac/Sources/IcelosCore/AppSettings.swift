@@ -12,6 +12,10 @@ public struct AppSettings {
         public static let outputFolder = "outputFolder"
         /// useMediaEngine is true when conversions prefer the media engine.
         public static let useMediaEngine = "useMediaEngine"
+        /// threads caps the encoder threads, 0 for automatic.
+        public static let threads = "threads"
+        /// passthrough is true when streams that already match are copied.
+        public static let passthrough = "passthrough"
     }
 
     /// Snapshot is a Codable copy of every setting.
@@ -24,13 +28,20 @@ public struct AppSettings {
         public var outputFolder: String?
         /// useMediaEngine is true when conversions prefer the media engine.
         public var useMediaEngine: Bool
+        /// threads caps the encoder threads, 0 for automatic.
+        public var threads: Int
+        /// passthrough is true when streams that already match are copied.
+        public var passthrough: Bool
 
         /// Creates a snapshot from its values.
-        public init(theme: ThemeName, appearance: Appearance, outputFolder: String?, useMediaEngine: Bool) {
+        public init(theme: ThemeName, appearance: Appearance, outputFolder: String?, useMediaEngine: Bool,
+                    threads: Int = 0, passthrough: Bool = false) {
             self.theme = theme
             self.appearance = appearance
             self.outputFolder = outputFolder
             self.useMediaEngine = useMediaEngine
+            self.threads = threads
+            self.passthrough = passthrough
         }
     }
 
@@ -69,17 +80,32 @@ public struct AppSettings {
         nonmutating set { defaults.set(newValue, forKey: Key.useMediaEngine) }
     }
 
+    /// threads caps the encoder threads, 0 for automatic, which is also what a negative value reads
+    /// as.
+    public var threads: Int {
+        get { max(defaults.integer(forKey: Key.threads), 0) }
+        nonmutating set { defaults.set(max(newValue, 0), forKey: Key.threads) }
+    }
+
+    /// passthrough is true when streams that already match are copied, false by default.
+    public var passthrough: Bool {
+        get { defaults.bool(forKey: Key.passthrough) }
+        nonmutating set { defaults.set(newValue, forKey: Key.passthrough) }
+    }
+
     /// snapshot returns every setting as one value.
     public var snapshot: Snapshot {
         get {
             Snapshot(theme: theme, appearance: appearance, outputFolder: outputFolder?.path,
-                     useMediaEngine: useMediaEngine)
+                     useMediaEngine: useMediaEngine, threads: threads, passthrough: passthrough)
         }
         nonmutating set {
             theme = newValue.theme
             appearance = newValue.appearance
             outputFolder = newValue.outputFolder.flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
             useMediaEngine = newValue.useMediaEngine
+            threads = newValue.threads
+            passthrough = newValue.passthrough
         }
     }
 }

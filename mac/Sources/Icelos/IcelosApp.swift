@@ -75,8 +75,8 @@ final class Session {
     init() {
         let backend = Backend.locate().map { Backend(executable: $0) }
         self.backend = backend
-        let model = Converter(send: { backend?.send($0) })
         let settings = AppSettings()
+        let model = Converter(send: { backend?.send($0) }, preferences: settings)
         model.outputFolder = settings.outputFolder
         model.hardware = settings.useMediaEngine
         self.model = model

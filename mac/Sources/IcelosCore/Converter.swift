@@ -43,6 +43,20 @@ public struct Item: Identifiable, Sendable, Equatable {
     public var outputSize: Int64?
     /// settings overrides the window settings for this file when set.
     public var settings: Preset?
+    /// streams chooses the tracks and extras this file's output carries.
+    public var streams = Streams()
+    /// splitChapters asks for one output per chapter.
+    public var splitChapters = false
+    /// plan is the backend's answer for the latest settings, nil until it arrives.
+    public var plan: Plan?
+    /// planError is why the backend refused the latest settings for this file.
+    public var planError: String?
+    /// chapterPart is true for each file of a conversion split by chapters.
+    public var chapterPart = false
+    /// planSeq numbers the plan requests, so a stale answer is dropped.
+    var planSeq = 0
+    /// planRequest is the latest plan request sent, so unchanged settings are not asked again.
+    var planRequest: Request?
 
     /// phase summarizes the item state.
     public var phase: Phase {
@@ -89,7 +103,9 @@ public final class Converter {
         didSet { if let p = preset(id: presetID) { settings = p } }
     }
     /// settings is the editable copy of what the next Convert produces.
-    public var settings: Preset?
+    public var settings: Preset? {
+        didSet { if settings != oldValue { schedulePlans() } }
+    }
     /// presetError is the latest problem saving, deleting, or reading custom presets.
     public private(set) var presetError: String?
     /// recent lists the preset IDs used last, newest first.
@@ -97,9 +113,21 @@ public final class Converter {
     /// selection is the selected file, whose override the inspector edits when it has one.
     public var selection: UUID?
     /// hardware prefers the media engine.
-    public var hardware = true
+    public var hardware = true {
+        didSet { if hardware != oldValue { schedulePlans() } }
+    }
+    /// passthrough copies the streams that already match the target instead of encoding them. It
+    /// is kept in the preferences.
+    public var passthrough = false {
+        didSet {
+            preferences?.passthrough = passthrough
+            if passthrough != oldValue { schedulePlans() }
+        }
+    }
     /// targetSize is the size for the target-size preset.
-    public var targetSize = "25MB"
+    public var targetSize = "25MB" {
+        didSet { if targetSize != oldValue { schedulePlans() } }
+    }
     /// outputFolder is where outputs go, or nil for next to each source.
     public var outputFolder: URL?
     /// thumbnails holds the row frame for each source with motion video, once it is made.
@@ -117,15 +145,30 @@ public final class Converter {
     @ObservationIgnored private let thumbnail: @Sendable (URL) async -> CGImage?
     /// thumbnailTasks are the frames asked for, one per source, kept so none is asked twice.
     @ObservationIgnored var thumbnailTasks: [URL: Task<Void, Never>] = [:]
+    /// preferences keeps passthrough and supplies the thread cap, or nil to keep nothing.
+    @ObservationIgnored private let preferences: AppSettings?
+    /// planDelay is how long edits settle before plans are asked for.
+    @ObservationIgnored private let planDelay: Duration
+    /// planTask sends the plans once edits settle.
+    @ObservationIgnored var planTask: Task<Void, Never>?
 
-    /// Creates a converter that sends requests through send.
+    /// Creates a converter that sends requests through send. Preferences keep the passthrough
+    /// choice and supply the thread cap; planDelay is how long edits settle before the backend is
+    /// asked what each file's conversion would do.
     public init(send: @escaping (Request) -> Void,
                 fileSize: @escaping (URL) -> Int64? = Converter.diskSize,
-                thumbnail: @escaping @Sendable (URL) async -> CGImage? = { await Thumbnails.image(for: $0) }) {
+                thumbnail: @escaping @Sendable (URL) async -> CGImage? = { await Thumbnails.image(for: $0) },
+                preferences: AppSettings? = nil, planDelay: Duration = .milliseconds(250)) {
         self.send = send
         self.fileSize = fileSize
         self.thumbnail = thumbnail
+        self.preferences = preferences
+        self.planDelay = planDelay
+        passthrough = preferences?.passthrough ?? false
     }
+
+    /// threads is the encoder thread cap from the preferences, 0 for automatic.
+    public var threads: Int { preferences?.threads ?? 0 }
 
     /// diskSize returns the size of the file at url.
     public nonisolated static func diskSize(_ url: URL) -> Int64? {
@@ -205,6 +248,7 @@ public final class Converter {
     public func editInspected(_ p: Preset) {
         if case .item(let id, _, false) = inspectorScope {
             update(id) { $0.settings = p }
+            schedulePlans()
         } else {
             settings = p
         }
@@ -217,6 +261,75 @@ public final class Converter {
         update(id) { item in
             guard item.phase == .pending else { return }
             item.settings = on ? nil : (item.settings ?? base)
+        }
+        schedulePlans()
+    }
+
+    /// selectedItem is the selected file, if any.
+    public var selectedItem: Item? { selection.flatMap { id in items.first { $0.id == id } } }
+
+    /// setStreams changes the stream choices of a pending file.
+    public func setStreams(_ id: UUID, _ streams: Streams) {
+        update(id) { item in
+            guard item.phase == .pending else { return }
+            item.streams = streams.normalized
+        }
+        schedulePlans()
+    }
+
+    /// setAudioTrack keeps or drops the source audio track at position for a pending file. The
+    /// last kept track stays.
+    public func setAudioTrack(_ id: UUID, _ position: Int, on: Bool) {
+        guard let item = items.first(where: { $0.id == id }) else { return }
+        let count = item.info?.audioStreams.count ?? 0
+        setStreams(id, item.streams.settingTrack(position, on: on, count: count))
+    }
+
+    /// addExternalAudio adds audio files as extra tracks of a pending file, up to the backend's
+    /// limit.
+    public func addExternalAudio(_ id: UUID, _ urls: [URL]) {
+        guard let item = items.first(where: { $0.id == id }) else { return }
+        var s = item.streams
+        let list = (s.externalAudio ?? []) + urls.map(\.path)
+        s.externalAudio = Array(list.prefix(Streams.maxExternalAudio))
+        setStreams(id, s)
+    }
+
+    /// removeExternalAudio drops the added audio file at index from a pending file.
+    public func removeExternalAudio(_ id: UUID, at index: Int) {
+        guard let item = items.first(where: { $0.id == id }) else { return }
+        var s = item.streams
+        guard var list = s.externalAudio, list.indices.contains(index) else { return }
+        list.remove(at: index)
+        s.externalAudio = list
+        setStreams(id, s)
+    }
+
+    /// setSubtitleFile sets or clears the subtitle file of a pending file. Clearing it from a file
+    /// with no subtitle tracks of its own turns subtitles off.
+    public func setSubtitleFile(_ id: UUID, _ url: URL?) {
+        guard let item = items.first(where: { $0.id == id }) else { return }
+        var s = item.streams
+        var sub = s.subtitles ?? Subtitles()
+        sub.external = url?.path
+        if url == nil && (item.info?.subtitleStreams.isEmpty ?? true) { sub.mode = nil }
+        if url != nil && sub.mode == nil { sub.mode = .keep }
+        s.subtitles = sub
+        setStreams(id, s)
+    }
+
+    /// subtitleModes lists the subtitle modes a file can use: none only, until it has a subtitle
+    /// track or file.
+    public func subtitleModes(_ item: Item) -> [SubtitleMode] {
+        let has = !(item.info?.subtitleStreams.isEmpty ?? true) || item.streams.subtitles?.external != nil
+        return has ? SubtitleMode.allCases : [.none]
+    }
+
+    /// setSplitChapters asks for one output per chapter of a pending file.
+    public func setSplitChapters(_ id: UUID, _ on: Bool) {
+        update(id) { item in
+            guard item.phase == .pending else { return }
+            item.splitChapters = on && !(item.info?.chapters ?? []).isEmpty
         }
     }
 
@@ -263,15 +376,62 @@ public final class Converter {
     /// backend records it as recently used; edited settings and per-file overrides go inline.
     public func convertAll() {
         guard let base = settings else { return }
+        planTask?.cancel()
         for i in items.indices where items[i].phase == .pending && items[i].probeError == nil {
             items[i].submitted = true
-            let p = items[i].settings ?? base
-            let byID = items[i].settings == nil && !isEdited
-            send(Request(id: "add:" + items[i].id.uuidString, op: "add", input: items[i].url.path,
-                         preset: byID ? p.id : nil, presetBody: byID ? nil : p,
-                         size: p.needsSize ? targetSize : nil, hardware: hardware,
-                         outDir: outputFolder?.path))
+            if request(for: items[i], base: base, op: "plan") != items[i].planRequest { items[i].plan = nil }
+            var req = request(for: items[i], base: base, op: "add")
+            req.id = "add:" + items[i].id.uuidString
+            req.splitChapters = items[i].splitChapters ? true : nil
+            send(req)
         }
+    }
+
+    /// request builds the add or plan request for item, which converts with its own settings or
+    /// else base.
+    private func request(for item: Item, base: Preset, op: String) -> Request {
+        let p = item.settings ?? base
+        let byID = item.settings == nil && !isEdited
+        var streams = item.streams
+        streams.threads = threads
+        streams = streams.normalized
+        return Request(op: op, input: item.url.path, preset: byID ? p.id : nil, presetBody: byID ? nil : p,
+                       size: p.needsSize ? targetSize : nil, hardware: hardware, outDir: outputFolder?.path,
+                       streams: streams.isDefault ? nil : streams, passthrough: passthrough ? true : nil)
+    }
+
+    /// schedulePlans asks for fresh plans once edits have settled for planDelay.
+    func schedulePlans() {
+        planTask?.cancel()
+        let delay = planDelay
+        planTask = Task { [weak self] in
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            self?.sendPlans()
+        }
+    }
+
+    /// sendPlans asks the backend what converting each pending, probed file would do, skipping
+    /// files whose request has not changed since the last ask.
+    func sendPlans() {
+        guard let base = settings else { return }
+        for i in items.indices where items[i].phase == .pending && items[i].probeError == nil && items[i].info != nil {
+            let req = request(for: items[i], base: base, op: "plan")
+            guard req != items[i].planRequest else { continue }
+            items[i].planSeq += 1
+            items[i].planRequest = req
+            items[i].plan = nil
+            items[i].planError = nil
+            var sent = req
+            sent.id = "plan.\(items[i].planSeq):" + items[i].id.uuidString
+            send(sent)
+        }
+    }
+
+    /// selectedPlan is the plan of the selected pending file, once it arrives.
+    public var selectedPlan: Plan? {
+        guard let item = selectedItem, item.phase == .pending else { return nil }
+        return item.plan
     }
 
     /// select makes the catalog's starting settings for container c, at a resolution, the window
@@ -350,8 +510,10 @@ public final class Converter {
         guard let i = items.firstIndex(where: { $0.id == id }), items[i].phase == .failed || items[i].phase == .canceled,
               items[i].probeError == nil else { return }
         let old = items[i]
-        items[i] = Item(id: UUID(), url: old.url, info: old.info, settings: old.settings)
+        items[i] = Item(id: UUID(), url: old.url, info: old.info, settings: old.settings, streams: old.streams,
+                        splitChapters: old.splitChapters && !old.chapterPart)
         if selection == id { selection = items[i].id }
+        schedulePlans()
     }
 
     /// remove drops an item that is not queued or running.
@@ -450,10 +612,18 @@ public final class Converter {
             if let id = itemID, let item = items.first(where: { $0.id == id }), m.info?.video != nil {
                 requestThumbnail(item.url)
             }
+            schedulePlans()
+        case "plan":
+            let seq = Converter.planSeq(kind)
+            update(itemID) { item in
+                guard item.planSeq == seq, item.phase == .pending else { return }
+                item.plan = m.plan
+            }
         case "add":
             guard let status = m.status else { return }
             update(itemID) { $0.jobID = status.id }
             apply(early.removeValue(forKey: status.id) ?? status)
+            if let jobs = m.jobs, jobs.count > 1 { addParts(of: itemID, jobs.dropFirst()) }
         case "job":
             guard let status = m.status else { return }
             if items.contains(where: { $0.jobID == status.id }) { apply(status) } else { early[status.id] = status }
@@ -462,6 +632,9 @@ public final class Converter {
             switch kind {
             case "probe": update(itemID) { $0.probeError = text }
             case "add": update(itemID) { $0.addError = text }
+            case _ where kind.hasPrefix("plan."):
+                let seq = Converter.planSeq(kind)
+                update(itemID) { if $0.planSeq == seq { $0.planError = text } }
             case "cancel": break
             case "preset.save", "preset.delete":
                 savingID = nil
@@ -487,6 +660,27 @@ public final class Converter {
         } else if settings == nil, let p = preset(id: presetID) {
             settings = p
         }
+    }
+
+    /// addParts lists the other jobs a conversion split by chapters became, each as its own file
+    /// after the first.
+    private func addParts(of id: UUID?, _ jobs: ArraySlice<JobStatus>) {
+        guard let id, let i = items.firstIndex(where: { $0.id == id }) else { return }
+        items[i].chapterPart = true
+        let first = items[i]
+        for (n, status) in jobs.enumerated() {
+            var part = Item(id: UUID(), url: first.url, info: first.info, submitted: true, jobID: status.id,
+                            settings: first.settings, streams: first.streams)
+            part.chapterPart = true
+            items.insert(part, at: i + 1 + n)
+            apply(early.removeValue(forKey: status.id) ?? status)
+        }
+    }
+
+    /// planSeq reads the sequence number from a plan reply kind such as "plan.3".
+    static func planSeq(_ kind: String) -> Int? {
+        guard kind.hasPrefix("plan.") else { return nil }
+        return Int(kind.dropFirst(5))
     }
 
     /// apply records a job snapshot on its item.

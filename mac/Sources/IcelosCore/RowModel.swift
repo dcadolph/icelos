@@ -63,6 +63,9 @@ public struct RowModel: Equatable, Sendable {
     public var chips: [String]
     /// ownSettings is true when the file uses its own settings rather than the window's.
     public var ownSettings: Bool
+    /// lossless is true when the backend's plan copies every output stream, so nothing is
+    /// re-encoded.
+    public var lossless: Bool
     /// estimate is the expected size before converting, e.g. "≈ 48 MB, 71% smaller", or a range
     /// such as "≈ 8 to 25 MB, at least 40% smaller" in quality mode.
     public var estimate: String?
@@ -82,12 +85,15 @@ public struct RowModel: Equatable, Sendable {
 
     /// Creates the row for item, which converts with its own settings or else windowSettings.
     /// TargetSize is the size typed for presets that aim for one, and hardware is true when the
-    /// media engine is on.
+    /// media engine is on. Once the file's plan arrives, its copied streams and its encoder decide
+    /// the estimate in place of the settings and the hardware switch.
     public init(item: Item, windowSettings: Preset?, catalog: Catalog?, targetSize: String = "",
                 hardware: Bool = false) {
         let settings = item.settings ?? windowSettings
-        name = item.url.lastPathComponent
+        name = item.chapterPart ? (item.outputURL?.lastPathComponent ?? item.url.lastPathComponent)
+            : item.url.lastPathComponent
         ownSettings = item.settings != nil
+        lossless = false
         media = item.info.map { $0.video == nil ? .audio : .video } ?? .unknown
         if let error = item.probeError {
             source = error
@@ -106,9 +112,15 @@ public struct RowModel: Equatable, Sendable {
 
         switch item.phase {
         case .pending, .queued:
-            if let info = item.info, let settings,
-               let range = Estimate.bytes(info, settings, targetBytes: Estimate.parseSize(targetSize),
-                                          hardware: hardware) {
+            let plan = item.plan
+            lossless = plan?.lossless == true
+            if let error = item.planError, item.phase == .pending {
+                detail = error
+                detailTone = .danger
+            } else if let info = item.info, let settings,
+               let range = Estimate.bytes(info, RowModel.applying(plan?.copied, to: settings),
+                                          targetBytes: Estimate.parseSize(targetSize),
+                                          hardware: plan?.hardware ?? hardware) {
                 estimate = Estimate.text(range, source: info.size > 0 ? info.size : nil)
             }
         case .running:
@@ -123,6 +135,15 @@ public struct RowModel: Equatable, Sendable {
         case .canceled:
             break
         }
+    }
+
+    /// applying returns p with the streams the plan copies set to copy, so the estimate counts
+    /// them at their source size.
+    static func applying(_ copied: Copy?, to p: Preset) -> Preset {
+        var out = p
+        if copied?.video?.copy == true { out.video.codec = copyCodec }
+        if copied?.audio?.copy == true { out.audio.codec = copyCodec }
+        return out
     }
 
     /// badge names the item's state. A file not read yet, or unreadable, gets its own label.
@@ -192,5 +213,46 @@ public struct RowModel: Equatable, Sendable {
             if let src = item.info?.size, let saving = Format.saving(from: src, to: out) { parts.append(saving) }
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// CopyNote explains in a sentence or two what passthrough does for one file's plan.
+public enum CopyNote {
+    /// text describes which streams of the planned file copy and why the others are encoded, or
+    /// asks for a file to be selected when there is no plan.
+    public static func text(_ plan: Plan?, passthrough: Bool) -> String {
+        guard let plan else {
+            return "Select a file to see which of its streams copy."
+        }
+        if plan.lossless { return "Video and audio copy as they are. Nothing is re-encoded." }
+        let kinds: [(String, Verdict?)] = [("Video", plan.copied.video), ("Audio", plan.copied.audio)]
+        let parts = kinds.compactMap { name, v -> String? in
+            guard let v else { return nil }
+            if v.copy { return "\(name) copies." }
+            return "\(name) is encoded: \(reason(v.reason, passthrough: passthrough))."
+        }
+        return parts.isEmpty ? "This file has nothing to copy." : parts.joined(separator: " ")
+    }
+
+    /// reason turns a backend reason into words.
+    static func reason(_ r: String?, passthrough: Bool) -> String {
+        switch r {
+        case "passthrough off": "it already matches, so turning this on copies it"
+        case "resize": "the frame size changes"
+        case "frame rate": "the frame rate changes"
+        case "codec": "the codec differs"
+        case "container": "the format cannot hold it"
+        case "target size": "a target size needs a new encode"
+        case "profile": "a profile is set"
+        case "level": "a level is set"
+        case "tag": "a codec tag is set"
+        case "burn subtitles": "subtitles are burned in"
+        case "sample rate": "the sample rate changes"
+        case "channels": "the channel count changes"
+        case "bit depth": "the bit depth changes"
+        case "unknown source": "the source codec is unknown"
+        case nil: passthrough ? "it does not match" : "passthrough is off"
+        case let other?: other
+        }
     }
 }

@@ -122,6 +122,212 @@ public struct Job: Codable, Hashable, Sendable {
     public var preset: Preset
     /// hardware prefers VideoToolbox.
     public var hardware: Bool
+    /// passthrough copies the streams that already match the target.
+    public var passthrough: Bool?
+    /// streams chooses the tracks and extras the output carries.
+    public var streams: Streams?
+    /// range limits the conversion to part of the source.
+    public var range: TimeRange?
+    /// splitChapters asks for one output per chapter.
+    public var splitChapters: Bool?
+
+    /// Creates a job.
+    public init(input: String, output: String, preset: Preset, hardware: Bool, passthrough: Bool? = nil,
+                streams: Streams? = nil, range: TimeRange? = nil, splitChapters: Bool? = nil) {
+        self.input = input
+        self.output = output
+        self.preset = preset
+        self.hardware = hardware
+        self.passthrough = passthrough
+        self.streams = streams
+        self.range = range
+        self.splitChapters = splitChapters
+    }
+}
+
+/// TimeRange mirrors the part of a source a job converts. Nil bounds mean the start or the end.
+public struct TimeRange: Codable, Hashable, Sendable {
+    /// startNs is where the conversion starts.
+    public var startNs: Int64?
+    /// endNs is where the conversion stops.
+    public var endNs: Int64?
+}
+
+/// SubtitleMode says what a job does with subtitles.
+public enum SubtitleMode: String, Codable, CaseIterable, Sendable {
+    /// none leaves subtitles out.
+    case none
+    /// keep carries every subtitle track the output format can hold.
+    case keep
+    /// pick carries one subtitle track.
+    case pick
+    /// burn draws one subtitle track into the picture.
+    case burn
+}
+
+/// Subtitles mirrors what a job does with subtitles.
+public struct Subtitles: Codable, Hashable, Sendable {
+    /// mode is what happens to subtitles, nil for none.
+    public var mode: SubtitleMode?
+    /// track is the position among the source's subtitle streams that pick and burn use.
+    public var track: Int?
+    /// external is a text subtitle file that keep adds and pick and burn use instead of track.
+    public var external: String?
+
+    /// Creates subtitle choices.
+    public init(mode: SubtitleMode? = nil, track: Int? = nil, external: String? = nil) {
+        self.mode = mode
+        self.track = track
+        self.external = external
+    }
+}
+
+/// Streams mirrors the tracks and extras a job's output carries. Nil fields keep the backend's
+/// defaults: the first audio track, no subtitles, the source's chapters and metadata, and ffmpeg's
+/// own thread count.
+public struct Streams: Codable, Hashable, Sendable {
+    /// allTracks as the only audio track keeps every audio track.
+    public static let allTracks = -1
+    /// maxExternalAudio is the most audio files one job may add.
+    public static let maxExternalAudio = 6
+    /// subtitleExtensions are the subtitle file types the backend takes.
+    public static let subtitleExtensions = ["srt", "ass", "ssa", "vtt"]
+
+    /// audioTracks lists positions among the source's audio streams, from 0.
+    public var audioTracks: [Int]?
+    /// externalAudio lists audio files added as extra tracks.
+    public var externalAudio: [String]?
+    /// subtitles chooses the subtitle handling.
+    public var subtitles: Subtitles?
+    /// dropChapters leaves the source's chapters out.
+    public var dropChapters: Bool?
+    /// dropMetadata leaves the source's tags out.
+    public var dropMetadata: Bool?
+    /// threads caps the encoder threads.
+    public var threads: Int?
+
+    /// Creates stream choices.
+    public init(audioTracks: [Int]? = nil, externalAudio: [String]? = nil, subtitles: Subtitles? = nil,
+                dropChapters: Bool? = nil, dropMetadata: Bool? = nil, threads: Int? = nil) {
+        self.audioTracks = audioTracks
+        self.externalAudio = externalAudio
+        self.subtitles = subtitles
+        self.dropChapters = dropChapters
+        self.dropMetadata = dropMetadata
+        self.threads = threads
+    }
+
+    /// normalized returns the same choices with every default spelled as nil, so equal choices
+    /// compare equal and an all-default value sends nothing.
+    public var normalized: Streams {
+        var s = self
+        if s.audioTracks == [] || s.audioTracks == [0] { s.audioTracks = nil }
+        if s.externalAudio?.isEmpty == true { s.externalAudio = nil }
+        if var sub = s.subtitles {
+            if sub.mode == SubtitleMode.none { sub.mode = nil }
+            if sub.track == 0 { sub.track = nil }
+            if sub.external?.isEmpty == true { sub.external = nil }
+            s.subtitles = sub == Subtitles() ? nil : sub
+        }
+        if s.dropChapters == false { s.dropChapters = nil }
+        if s.dropMetadata == false { s.dropMetadata = nil }
+        if let t = s.threads, t <= 0 { s.threads = nil }
+        return s
+    }
+
+    /// isDefault is true when every choice is the backend default.
+    public var isDefault: Bool { normalized == Streams() }
+
+    /// tracks returns the audio positions kept from a source with count audio streams.
+    public func tracks(count: Int) -> [Int] {
+        guard count > 0 else { return [] }
+        let list = audioTracks ?? []
+        if list.isEmpty { return [0] }
+        if list == [Streams.allTracks] { return Array(0..<count) }
+        return list.filter { $0 >= 0 && $0 < count }.sorted()
+    }
+
+    /// settingTrack returns the choices with the audio track at position turned on or off, from a
+    /// source with count audio streams. The last kept track cannot be turned off.
+    public func settingTrack(_ position: Int, on: Bool, count: Int) -> Streams {
+        var kept = Set(tracks(count: count))
+        if on { kept.insert(position) } else { kept.remove(position) }
+        guard !kept.isEmpty else { return self }
+        var s = self
+        s.audioTracks = kept.count == count && count > 1 ? [Streams.allTracks] : kept.sorted()
+        return s.normalized
+    }
+
+    /// subtitleMode is the subtitle mode, none when unset.
+    public var subtitleMode: SubtitleMode { subtitles?.mode ?? SubtitleMode.none }
+}
+
+/// Verdict mirrors whether one kind of stream passes through untouched.
+public struct Verdict: Codable, Hashable, Sendable {
+    /// copy is true when the stream passes through.
+    public var copy: Bool
+    /// reason says why the stream is encoded.
+    public var reason: String?
+
+    /// Creates a verdict.
+    public init(copy: Bool, reason: String? = nil) {
+        self.copy = copy
+        self.reason = reason
+    }
+}
+
+/// Copy mirrors the passthrough verdict for each kind of output stream. A nil verdict means the
+/// output has no such stream.
+public struct Copy: Codable, Hashable, Sendable {
+    /// video is the video verdict.
+    public var video: Verdict?
+    /// audio is the verdict for every audio track together.
+    public var audio: Verdict?
+
+    /// Creates verdicts.
+    public init(video: Verdict? = nil, audio: Verdict? = nil) {
+        self.video = video
+        self.audio = audio
+    }
+
+    /// lossless is true when the output has a stream and every one of them copies.
+    public var lossless: Bool {
+        let present = [video, audio].compactMap { $0 }
+        return !present.isEmpty && present.allSatisfy(\.copy)
+    }
+}
+
+/// Plan mirrors the backend's answer to a plan request: what an add would run.
+public struct Plan: Codable, Hashable, Sendable {
+    /// copy says which streams could pass through.
+    public var copy: Copy
+    /// copied says which streams the conversion copies.
+    public var copied: Copy
+    /// lossless is true when the conversion copies every output stream.
+    public var lossless: Bool
+    /// output is the path the conversion would write.
+    public var output: String
+    /// passes holds the ffmpeg arguments of each pass.
+    public var passes: [[String]]
+    /// encoder is the video encoder, nil when video is copied or absent.
+    public var encoder: String?
+    /// hardware is true when the encoder runs on the media engine.
+    public var hardware: Bool
+    /// filters lists filters that some ffmpeg builds lack.
+    public var filters: [String]?
+
+    /// Creates a plan.
+    public init(copy: Copy, copied: Copy, lossless: Bool, output: String = "", passes: [[String]] = [],
+                encoder: String? = nil, hardware: Bool = false, filters: [String]? = nil) {
+        self.copy = copy
+        self.copied = copied
+        self.lossless = lossless
+        self.output = output
+        self.passes = passes
+        self.encoder = encoder
+        self.hardware = hardware
+        self.filters = filters
+    }
 }
 
 /// JobStatus mirrors a backend job snapshot.
@@ -156,6 +362,16 @@ public struct MediaStream: Codable, Hashable, Sendable {
     public var disposition: Disposition?
     /// sideData carries per-stream extras such as the display rotation.
     public var sideData: [SideData]?
+    /// tags carries the stream's language and title.
+    public var tags: Tags?
+
+    /// Tags mirrors the stream tags the backend reads.
+    public struct Tags: Codable, Hashable, Sendable {
+        /// language is the ISO 639 language code.
+        public var language: String?
+        /// title is the track name.
+        public var title: String?
+    }
 
     /// Disposition mirrors the ffprobe role flags.
     public struct Disposition: Codable, Hashable, Sendable {
@@ -190,7 +406,7 @@ public struct MediaStream: Codable, Hashable, Sendable {
 
     /// CodingKeys maps ffprobe field names.
     enum CodingKeys: String, CodingKey {
-        case index, width, height, channels, disposition
+        case index, width, height, channels, disposition, tags
         case kind = "codec_type"
         case codec = "codec_name"
         case sideData = "side_data_list"
@@ -207,6 +423,24 @@ public struct MediaInfo: Codable, Hashable, Sendable {
     public var size: Int64
     /// streams lists every stream.
     public var streams: [MediaStream]?
+    /// chapters lists the source's chapter marks.
+    public var chapters: [Chapter]?
+
+    /// Chapter mirrors one chapter mark.
+    public struct Chapter: Codable, Hashable, Sendable {
+        /// startNs is where the chapter starts.
+        public var startNs: Int64
+        /// endNs is where the chapter ends.
+        public var endNs: Int64
+        /// title is the chapter name.
+        public var title: String?
+    }
+
+    /// audioStreams lists the audio streams in source order, whose positions Streams uses.
+    public var audioStreams: [MediaStream] { streams?.filter { $0.kind == "audio" } ?? [] }
+
+    /// subtitleStreams lists the subtitle streams in source order, whose positions Subtitles uses.
+    public var subtitleStreams: [MediaStream] { streams?.filter { $0.kind == "subtitle" } ?? [] }
 
     /// video is the first video stream that is not cover art.
     public var video: MediaStream? { streams?.first { $0.kind == "video" && !$0.isCover } }
@@ -242,13 +476,20 @@ public struct Request: Codable, Sendable, Equatable {
     public var hardware: Bool?
     /// outDir is the output folder.
     public var outDir: String?
+    /// streams chooses the tracks and extras the output carries.
+    public var streams: Streams?
+    /// splitChapters asks for one output per chapter.
+    public var splitChapters: Bool?
+    /// passthrough copies the streams that already match the target.
+    public var passthrough: Bool?
     /// job is the job ID to cancel.
     public var job: String?
 
     /// Creates a request.
     public init(id: String? = nil, op: String, path: String? = nil, input: String? = nil,
                 preset: String? = nil, presetBody: Preset? = nil, size: String? = nil,
-                hardware: Bool? = nil, outDir: String? = nil, job: String? = nil) {
+                hardware: Bool? = nil, outDir: String? = nil, streams: Streams? = nil,
+                splitChapters: Bool? = nil, passthrough: Bool? = nil, job: String? = nil) {
         self.id = id
         self.op = op
         self.path = path
@@ -258,6 +499,9 @@ public struct Request: Codable, Sendable, Equatable {
         self.size = size
         self.hardware = hardware
         self.outDir = outDir
+        self.streams = streams
+        self.splitChapters = splitChapters
+        self.passthrough = passthrough
         self.job = job
     }
 }
@@ -284,6 +528,8 @@ public struct Message: Codable, Sendable {
     public var catalog: Catalog?
     /// info is a probe result.
     public var info: MediaInfo?
+    /// plan is the answer to a plan request.
+    public var plan: Plan?
     /// status is one job snapshot.
     public var status: JobStatus?
     /// jobs lists every job.

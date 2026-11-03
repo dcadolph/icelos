@@ -23,8 +23,11 @@ private let presetsLine = #"{"type":"presets","reply":"presets","presets":[{"id"
 private final class Harness {
     /// sent holds every request in order.
     var sent: [Request] = []
+    /// preferences backs passthrough and the thread cap, or nil to keep nothing.
+    var preferences: AppSettings?
     /// model is the converter under test.
-    lazy var model = Converter(send: { [unowned self] in self.sent.append($0) }, fileSize: { _ in 40 })
+    lazy var model = Converter(send: { [unowned self] in self.sent.append($0) }, fileSize: { _ in 40 },
+                               preferences: preferences, planDelay: .zero)
 
     /// load feeds the model the captured presets and catalog replies.
     func load() throws {
@@ -33,8 +36,210 @@ private final class Harness {
     }
 }
 
+/// streamsProbe is a probe reply for item: 1080p H.264 with three audio tracks, one subtitle
+/// track, and two chapters.
+private func streamsProbe(_ id: UUID) -> String {
+    #"{"type":"probe","reply":"probe:\#(id.uuidString)","info":{"format":"mov","durationNs":60000000000,"size":1000000,"streams":[{"index":0,"codec_type":"video","codec_name":"h264","width":1920,"height":1080},{"index":1,"codec_type":"audio","codec_name":"aac","channels":2,"tags":{"language":"eng","title":"Main"}},{"index":2,"codec_type":"audio","codec_name":"ac3","channels":6,"tags":{"language":"fra"}},{"index":3,"codec_type":"audio","codec_name":"aac","channels":2,"tags":{"title":"Commentary"}},{"index":4,"codec_type":"subtitle","codec_name":"mov_text","tags":{"language":"eng"}}],"chapters":[{"startNs":0,"endNs":30000000000,"title":"One"},{"startNs":30000000000,"endNs":60000000000,"title":"Two"}]}}"#
+}
+
+/// planLine is a plan reply for item with sequence seq.
+private func planLine(_ id: UUID, seq: Int, lossless: Bool, copied: Bool, hardware: Bool) -> String {
+    let verdict = copied ? #"{"copy":true}"# : #"{"copy":false,"reason":"passthrough off"}"#
+    return #"{"type":"plan","reply":"plan.\#(seq):\#(id.uuidString)","plan":{"copy":{"video":{"copy":true},"audio":{"copy":true}},"copied":{"video":\#(verdict),"audio":\#(verdict)},"lossless":\#(lossless),"output":"/x/clip.mp4","passes":[["-i","/x/clip.mov"]],"hardware":\#(hardware)}}"#
+}
+
 @MainActor
 @Suite struct ConverterTests {
+    @Test func togglingATrackSendsItInAdd() throws {
+        let h = Harness()
+        try h.load()
+        h.model.add(urls: [URL(fileURLWithPath: "/x/clip.mov")])
+        let id = h.model.items[0].id
+        h.model.handle(try decode(streamsProbe(id)))
+        let info = try #require(h.model.items[0].info)
+        #expect(info.audioStreams.map { $0.tags?.language } == ["eng", "fra", nil])
+        #expect(info.audioStreams.map { $0.tags?.title } == ["Main", nil, "Commentary"])
+        #expect(info.chapters?.map(\.title) == ["One", "Two"])
+
+        h.model.setAudioTrack(id, 2, on: true)
+        #expect(h.model.items[0].streams.audioTracks == [0, 2])
+        h.model.setAudioTrack(id, 0, on: false)
+        #expect(h.model.items[0].streams.audioTracks == [2])
+        h.model.setAudioTrack(id, 2, on: false)
+        #expect(h.model.items[0].streams.audioTracks == [2], "the last kept track stays")
+        h.model.setAudioTrack(id, 0, on: true)
+        h.model.setAudioTrack(id, 1, on: true)
+        #expect(h.model.items[0].streams.audioTracks == [Streams.allTracks], "every track is all")
+        h.model.setAudioTrack(id, 0, on: false)
+        h.model.setAudioTrack(id, 1, on: false)
+
+        h.model.addExternalAudio(id, (1...8).map { URL(fileURLWithPath: "/x/dub\($0).m4a") })
+        #expect(h.model.items[0].streams.externalAudio?.count == Streams.maxExternalAudio)
+        h.model.removeExternalAudio(id, at: 0)
+        #expect(h.model.items[0].streams.externalAudio?.first == "/x/dub2.m4a")
+        h.model.setSubtitleFile(id, URL(fileURLWithPath: "/x/clip.srt"))
+        #expect(h.model.items[0].streams.subtitles == Subtitles(mode: .keep, external: "/x/clip.srt"))
+        h.model.setSplitChapters(id, true)
+        var s = h.model.items[0].streams
+        s.dropMetadata = true
+        h.model.setStreams(id, s)
+
+        h.model.convertAll()
+        let add = try #require(h.sent.last)
+        #expect(add.op == "add")
+        #expect(add.streams == Streams(audioTracks: [2], externalAudio: (2...6).map { "/x/dub\($0).m4a" },
+                                       subtitles: Subtitles(mode: .keep, external: "/x/clip.srt"),
+                                       dropMetadata: true))
+        #expect(add.splitChapters == true)
+        let body = try #require(String(data: JSONEncoder().encode(add), encoding: .utf8))
+        #expect(body.contains(#""audioTracks":[2]"#) && body.contains(#""splitChapters":true"#))
+        #expect(body.contains(#""subtitles":{"#) && body.contains(#""dropMetadata":true"#))
+    }
+
+    @Test func defaultStreamsSendNothing() throws {
+        let h = Harness()
+        try h.load()
+        h.model.add(urls: [URL(fileURLWithPath: "/x/clip.mov")])
+        let id = h.model.items[0].id
+        h.model.handle(try decode(streamsProbe(id)))
+        h.model.setStreams(id, Streams(audioTracks: [0], externalAudio: [], subtitles: Subtitles(mode: SubtitleMode.none),
+                                       dropChapters: false, threads: 0))
+        #expect(h.model.items[0].streams == Streams())
+        h.model.convertAll()
+        #expect(h.sent.last?.streams == nil)
+        #expect(h.sent.last?.splitChapters == nil)
+        #expect(h.sent.last?.passthrough == nil)
+    }
+
+    @Test func subtitleModesNeedASubtitle() throws {
+        let h = Harness()
+        try h.load()
+        h.model.add(urls: [URL(fileURLWithPath: "/x/a.mov")])
+        let id = h.model.items[0].id
+        h.model.handle(try decode(#"{"type":"probe","reply":"probe:\#(id.uuidString)","info":{"format":"mov","durationNs":1000000000,"size":10,"streams":[{"index":0,"codec_type":"video","codec_name":"h264","width":640,"height":360}]}}"#))
+        #expect(h.model.subtitleModes(h.model.items[0]) == [.none])
+        h.model.setSplitChapters(id, true)
+        #expect(!h.model.items[0].splitChapters, "no chapters, no split")
+        h.model.setSubtitleFile(id, URL(fileURLWithPath: "/x/a.srt"))
+        #expect(h.model.subtitleModes(h.model.items[0]) == SubtitleMode.allCases)
+        var s = h.model.items[0].streams
+        s.subtitles?.mode = .burn
+        h.model.setStreams(id, s)
+        h.model.setSubtitleFile(id, nil)
+        #expect(h.model.items[0].streams.subtitles == nil, "removing the only subtitle turns subtitles off")
+    }
+
+    @Test func planReplySetsTheBadge() async throws {
+        let h = Harness()
+        try h.load()
+        h.model.add(urls: [URL(fileURLWithPath: "/x/clip.mov")])
+        let id = h.model.items[0].id
+        h.model.handle(try decode(streamsProbe(id)))
+        await h.model.planTask?.value
+        let first = try #require(h.sent.last)
+        #expect(first.op == "plan" && first.id == "plan.1:" + id.uuidString)
+        #expect(first.preset == "apple" && first.hardware == true && first.passthrough == nil)
+        let sentCount = h.sent.count
+        h.model.schedulePlans()
+        await h.model.planTask?.value
+        #expect(h.sent.count == sentCount, "unchanged settings are not asked again")
+
+        h.model.passthrough = true
+        await h.model.planTask?.value
+        let second = try #require(h.sent.last)
+        #expect(second.id == "plan.2:" + id.uuidString && second.passthrough == true)
+
+        h.model.handle(try decode(planLine(id, seq: 1, lossless: true, copied: true, hardware: false)))
+        #expect(h.model.items[0].plan == nil, "a stale plan is dropped")
+        #expect(h.model.row(id)?.lossless == false)
+
+        h.model.handle(try decode(planLine(id, seq: 2, lossless: true, copied: true, hardware: false)))
+        let plan = try #require(h.model.items[0].plan)
+        #expect(plan.lossless && plan.copied.video?.copy == true)
+        #expect(h.model.row(id)?.lossless == true)
+        h.model.selection = id
+        #expect(h.model.selectedPlan == plan)
+
+        h.model.convertAll()
+        #expect(h.model.items[0].plan == plan, "the plan for what was submitted stays")
+        #expect(h.model.row(id)?.lossless == true)
+        #expect(h.sent.last?.op == "add" && h.sent.last?.passthrough == true)
+    }
+
+    @Test func editsClearThePlan() async throws {
+        let h = Harness()
+        try h.load()
+        h.model.add(urls: [URL(fileURLWithPath: "/x/clip.mov")])
+        let id = h.model.items[0].id
+        h.model.handle(try decode(streamsProbe(id)))
+        await h.model.planTask?.value
+        h.model.handle(try decode(planLine(id, seq: 1, lossless: true, copied: true, hardware: false)))
+        #expect(h.model.row(id)?.lossless == true)
+        h.model.hardware = false
+        h.model.convertAll()
+        #expect(h.model.items[0].plan == nil, "a plan for other settings never labels the submitted file")
+        #expect(h.model.row(id)?.lossless == false)
+    }
+
+    @Test func planErrorsShowOnTheRow() async throws {
+        let h = Harness()
+        try h.load()
+        h.model.add(urls: [URL(fileURLWithPath: "/x/clip.mov")])
+        let id = h.model.items[0].id
+        h.model.handle(try decode(streamsProbe(id)))
+        await h.model.planTask?.value
+        h.model.handle(try decode(#"{"type":"error","reply":"plan.1:\#(id.uuidString)","error":"no subtitle stream"}"#))
+        #expect(h.model.items[0].planError == "no subtitle stream")
+        #expect(h.model.fault == nil)
+        let row = try #require(h.model.row(id))
+        #expect(row.detail == "no subtitle stream" && row.detailTone == .danger)
+    }
+
+    @Test func threadsIsSent() throws {
+        try withScratchDefaults { defaults in
+            let prefs = AppSettings(defaults: defaults)
+            prefs.threads = 4
+            let h = Harness()
+            h.preferences = prefs
+            try h.load()
+            h.model.add(urls: [URL(fileURLWithPath: "/x/clip.mov")])
+            h.model.handle(try decode(streamsProbe(h.model.items[0].id)))
+            h.model.passthrough = true
+            #expect(prefs.passthrough, "passthrough is kept in the preferences")
+            h.model.convertAll()
+            #expect(h.sent.last?.streams == Streams(threads: 4))
+            #expect(h.sent.last?.passthrough == true)
+            let again = Harness()
+            again.preferences = prefs
+            #expect(again.model.passthrough, "a new window starts with the kept choice")
+        }
+    }
+
+    @Test func splitReplyListsEveryChapter() throws {
+        let h = Harness()
+        try h.load()
+        h.model.add(urls: [URL(fileURLWithPath: "/x/clip.mov")])
+        let id = h.model.items[0].id
+        h.model.handle(try decode(streamsProbe(id)))
+        h.model.setSplitChapters(id, true)
+        h.model.convertAll()
+        h.model.handle(try decode(statusLine(type: "job", id: "8", state: "running", output: "/x/clip - 02 Two.mp4")))
+        let one = statusLine(type: "add", id: "7", state: "queued", output: "/x/clip - 01 One.mp4")
+        let two = statusLine(type: "add", id: "8", state: "queued", output: "/x/clip - 02 Two.mp4")
+        func status(_ line: String) throws -> String {
+            let range = try #require(line.range(of: #""status":"#))
+            return String(line[range.upperBound...].dropLast())
+        }
+        h.model.handle(try decode(#"{"type":"add","reply":"add:\#(id.uuidString)","status":\#(try status(one)),"jobs":[\#(try status(one)),\#(try status(two))]}"#))
+        #expect(h.model.items.count == 2)
+        #expect(h.model.items.map(\.jobID) == ["7", "8"])
+        #expect(h.model.items.allSatisfy { $0.chapterPart })
+        #expect(h.model.items[1].phase == .running, "an early event for a later chapter is applied")
+        #expect(h.model.items.compactMap { h.model.row($0.id)?.name } == ["clip - 01 One.mp4", "clip - 02 Two.mp4"])
+        h.model.handle(try decode(statusLine(type: "job", id: "8", state: "done", output: "/x/clip - 02 Two.mp4")))
+        #expect(h.model.items[1].phase == .done)
+    }
+
     @Test func readyAsksForPresetsAndCapabilities() throws {
         let h = Harness()
         h.model.handle(try decode(#"{"type":"ready","version":"v1.0.0"}"#))

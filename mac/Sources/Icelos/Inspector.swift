@@ -16,7 +16,13 @@ struct Inspector: View {
             if let catalog = model.catalog, let current = model.inspected {
                 SettingsForm(catalog: catalog,
                              draft: Binding(get: { model.inspected ?? current }, set: { model.editInspected($0) }),
-                             targetSize: $model.targetSize)
+                             targetSize: $model.targetSize, passthrough: $model.passthrough,
+                             copyNote: CopyNote.text(model.selectedPlan, passthrough: model.passthrough)) {
+                    if case .item(let id, _, _) = model.inspectorScope,
+                       let item = model.items.first(where: { $0.id == id }), let info = item.info {
+                        StreamsSection(model: model, item: item, info: info)
+                    }
+                }
             } else {
                 ProgressView()
                     .controlSize(.small)
@@ -132,20 +138,28 @@ struct Inspector: View {
 }
 
 /// SettingsForm edits one set of conversion settings with controls built from the catalog, so a
-/// new codec in the backend needs no change here.
-struct SettingsForm: View {
+/// new codec in the backend needs no change here. Extra sections, such as a file's streams, follow
+/// the audio section.
+struct SettingsForm<Extra: View>: View {
     /// catalog supplies the containers, codecs, and value lists.
     let catalog: Catalog
     /// draft is the settings being edited, applied as each control changes.
     @Binding var draft: Preset
     /// targetSize is the size the target-size preset aims for.
     @Binding var targetSize: String
+    /// passthrough copies streams that already match instead of encoding them.
+    @Binding var passthrough: Bool
+    /// copyNote says what passthrough does for the selected file.
+    let copyNote: String
+    /// extra holds the sections after audio.
+    @ViewBuilder let extra: Extra
 
     var body: some View {
         Form {
             formatSection
             if shown.contains(.videoEncoder) { videoSection }
             audioSection
+            extra
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
@@ -186,6 +200,13 @@ struct SettingsForm: View {
                 }
                 .help("The size each file should come in under, such as 25MB or 1.5GB.")
             }
+            Toggle("Copy streams that already match", isOn: $passthrough)
+                .help("A stream already in the target codec, at the same size and rate, is copied as it is: no quality loss and much faster.")
+        } footer: {
+            Text(copyNote)
+                .font(.callout)
+                .foregroundStyle(Theme.muted)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -555,5 +576,150 @@ struct BitrateField: View {
         }
         let k = Double(b) / 1000
         return (k == k.rounded() ? String(Int(k)) : String(format: "%.2f", k)) + " kb/s"
+    }
+}
+
+/// StreamsSection chooses the tracks and extras one file's output carries: its audio tracks, added
+/// audio files, subtitles, chapters, and metadata.
+struct StreamsSection: View {
+    /// model receives the changes.
+    let model: Converter
+    /// item is the selected file.
+    let item: Item
+    /// info is the file's probe result.
+    let info: MediaInfo
+
+    var body: some View {
+        Section("Streams") {
+            audioTracks
+            externalAudio
+            subtitles
+            Toggle("Keep chapters", isOn: binding(\.dropChapters, inverted: true))
+                .help("Carry the source's chapter marks into the output.")
+            Toggle("Keep metadata", isOn: binding(\.dropMetadata, inverted: true))
+                .help("Carry the source's title, date, and other tags into the output.")
+            let chapters = info.chapters?.count ?? 0
+            Toggle(chapters > 0 ? "Split into \(chapters) files by chapter" : "Split by chapters",
+                   isOn: Binding(get: { item.splitChapters }, set: { model.setSplitChapters(item.id, $0) }))
+                .disabled(chapters == 0)
+                .help(chapters == 0 ? "This file has no chapters." : "Write one file per chapter, named after it.")
+        }
+    }
+
+    /// audioTracks lists the source's audio tracks with a switch each.
+    @ViewBuilder private var audioTracks: some View {
+        let tracks = info.audioStreams
+        if tracks.count > 1 {
+            let kept = Set(item.streams.tracks(count: tracks.count))
+            ForEach(tracks.indices, id: \.self) { i in
+                Toggle(StreamsSection.label(tracks[i], position: i), isOn: Binding(
+                    get: { kept.contains(i) },
+                    set: { model.setAudioTrack(item.id, i, on: $0) }))
+                    .disabled(kept == [i])
+                    .help(kept == [i] ? "At least one audio track stays." : "Carry this audio track into the output.")
+            }
+        }
+    }
+
+    /// externalAudio lists the added audio files and offers to add more.
+    @ViewBuilder private var externalAudio: some View {
+        let files = item.streams.externalAudio ?? []
+        ForEach(files.indices, id: \.self) { i in
+            fileRow(files[i], kind: "audio") { model.removeExternalAudio(item.id, at: i) }
+        }
+        Button("Add Audio Track…") {
+            MediaFiles.chooseAudio { model.addExternalAudio(item.id, $0) }
+        }
+        .disabled(files.count >= Streams.maxExternalAudio)
+        .help("Add up to \(Streams.maxExternalAudio) audio files, such as a dub or a commentary, as extra tracks.")
+    }
+
+    /// subtitles picks the subtitle mode, the track, and an added subtitle file.
+    @ViewBuilder private var subtitles: some View {
+        let modes = model.subtitleModes(item)
+        let sub = item.streams.subtitles ?? Subtitles()
+        Picker("Subtitles", selection: Binding(
+            get: { item.streams.subtitleMode },
+            set: { mode in
+                var s = item.streams
+                var next = s.subtitles ?? Subtitles()
+                next.mode = mode
+                s.subtitles = next
+                model.setStreams(item.id, s)
+            })) {
+            ForEach(modes, id: \.self) { Text(StreamsSection.name($0)).tag($0) }
+        }
+        .help(modes == [.none] ? "This file has no subtitles. Add a subtitle file to use one." :
+              "Keep carries every track the format holds. Pick carries one. Burn in draws one into the picture.")
+        let own = info.subtitleStreams
+        if [.pick, .burn].contains(item.streams.subtitleMode), sub.external == nil, own.count > 1 {
+            Picker("Subtitle track", selection: Binding(
+                get: { sub.track ?? 0 },
+                set: { track in
+                    var s = item.streams
+                    s.subtitles?.track = track
+                    model.setStreams(item.id, s)
+                })) {
+                ForEach(own.indices, id: \.self) { Text(StreamsSection.label(own[$0], position: $0)).tag($0) }
+            }
+            .help("The subtitle track to carry or burn in.")
+        }
+        if let file = sub.external {
+            fileRow(file, kind: "subtitle") { model.setSubtitleFile(item.id, nil) }
+        } else {
+            Button("Add Subtitle File…") {
+                MediaFiles.chooseSubtitle { model.setSubtitleFile(item.id, $0) }
+            }
+            .help("Use an SRT, ASS, SSA, or VTT file. Pick and burn in use it in place of the file's own tracks.")
+        }
+    }
+
+    /// fileRow shows an added file with a button that removes it.
+    private func fileRow(_ path: String, kind: String, remove: @escaping () -> Void) -> some View {
+        HStack(spacing: 6) {
+            Text(URL(fileURLWithPath: path).lastPathComponent)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 4)
+            Button(action: remove) {
+                Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove this \(kind) file.")
+            .accessibilityLabel("Remove \(URL(fileURLWithPath: path).lastPathComponent)")
+        }
+    }
+
+    /// binding edits one optional flag of the file's streams, inverted for the keep switches.
+    private func binding(_ key: WritableKeyPath<Streams, Bool?>, inverted: Bool) -> Binding<Bool> {
+        Binding(
+            get: { (item.streams[keyPath: key] ?? false) != inverted },
+            set: { on in
+                var s = item.streams
+                s[keyPath: key] = on != inverted
+                model.setStreams(item.id, s)
+            })
+    }
+
+    /// label names a track by its language, title, codec, and channels.
+    static func label(_ s: MediaStream, position: Int) -> String {
+        var parts: [String] = []
+        if let lang = s.tags?.language, !lang.isEmpty, lang != "und" {
+            parts.append(Locale.current.localizedString(forLanguageCode: lang) ?? lang.uppercased())
+        }
+        if let title = s.tags?.title, !title.isEmpty { parts.append(title) }
+        if let codec = s.codec { parts.append(codec.uppercased()) }
+        if let ch = s.channels, ch > 0 { parts.append(ch == 1 ? "mono" : ch == 2 ? "stereo" : "\(ch) ch") }
+        return "\(position + 1). " + parts.joined(separator: ", ")
+    }
+
+    /// name labels a subtitle mode.
+    static func name(_ mode: SubtitleMode) -> String {
+        switch mode {
+        case .none: "None"
+        case .keep: "Keep all"
+        case .pick: "Pick one"
+        case .burn: "Burn in"
+        }
     }
 }

@@ -110,6 +110,10 @@ struct JobRow: View {
             HStack(spacing: 6) {
                 if row.ownSettings { Chip(text: "Own settings", tone: .accentText) }
                 ForEach(row.chips, id: \.self) { Chip(text: $0, tone: .text) }
+                if row.lossless {
+                    Chip(text: "LOSSLESS", tone: .success, tracking: 0.6)
+                        .help("Every stream is copied as it is. Nothing is re-encoded.")
+                }
                 if let estimate = row.estimate {
                     Text(estimate)
                         .font(.caption)
@@ -232,10 +236,13 @@ struct Chip: View {
     let text: String
     /// tone is the label color.
     let tone: Palette.Slot
+    /// tracking spaces the letters, for uppercase labels.
+    var tracking: CGFloat = 0
 
     var body: some View {
         Text(text)
             .font(.caption.weight(.medium))
+            .tracking(tracking)
             .monospacedDigit()
             .foregroundStyle(ThemeColor(slot: tone))
             .padding(.horizontal, 6)

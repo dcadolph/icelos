@@ -114,6 +114,52 @@ private func item(_ phase: Phase, preset p: Preset) -> Item {
         #expect(row.chips == ["MP3", "MP3", "192 kb/s"])
     }
 
+    @Test func losslessChipFollowsWhatIsCopied() throws {
+        let p = try #require(try builtins()["web"])
+        var it = item(.pending, preset: p)
+        let both = Copy(video: Verdict(copy: true), audio: Verdict(copy: true))
+        let off = Copy(video: Verdict(copy: false, reason: "passthrough off"),
+                       audio: Verdict(copy: false, reason: "passthrough off"))
+        it.plan = Plan(copy: both, copied: off, lossless: false, hardware: true)
+        let qualifies = RowModel(item: it, windowSettings: p, catalog: try catalog(), hardware: true)
+        #expect(!qualifies.lossless, "copy true but copied false shows no chip")
+        #expect(qualifies.estimate?.contains(" to ") == true, "an encode keeps the quality range")
+
+        it.plan = Plan(copy: both, copied: both, lossless: true)
+        let copies = RowModel(item: it, windowSettings: p, catalog: try catalog(), hardware: true)
+        #expect(copies.lossless)
+        let estimate = try #require(copies.estimate)
+        #expect(!estimate.contains(" to "), "copied streams are a point estimate: \(estimate)")
+
+        it.plan = nil
+        #expect(!RowModel(item: it, windowSettings: p, catalog: nil).lossless, "no plan, no chip")
+    }
+
+    @Test func planHardwareDecidesTheEstimate() throws {
+        let p = try #require(try builtins()["web"])
+        var it = item(.pending, preset: p)
+        let encode = Copy(video: Verdict(copy: false, reason: "codec"), audio: Verdict(copy: false, reason: "codec"))
+        let software = RowModel(item: it, windowSettings: p, catalog: nil, hardware: false).estimate
+        let hardware = RowModel(item: it, windowSettings: p, catalog: nil, hardware: true).estimate
+        #expect(software != hardware)
+        it.plan = Plan(copy: encode, copied: encode, lossless: false, hardware: false)
+        #expect(RowModel(item: it, windowSettings: p, catalog: nil, hardware: true).estimate == software,
+                "the plan's encoder wins over the switch")
+    }
+
+    @Test func copyNoteSaysWhatCopies() {
+        #expect(CopyNote.text(nil, passthrough: true) == "Select a file to see which of its streams copy.")
+        let off = Verdict(copy: false, reason: "passthrough off")
+        let both = Copy(video: Verdict(copy: true), audio: Verdict(copy: true))
+        #expect(CopyNote.text(Plan(copy: both, copied: both, lossless: true), passthrough: true)
+                == "Video and audio copy as they are. Nothing is re-encoded.")
+        #expect(CopyNote.text(Plan(copy: both, copied: Copy(video: off, audio: off), lossless: false), passthrough: false)
+                == "Video is encoded: it already matches, so turning this on copies it. Audio is encoded: it already matches, so turning this on copies it.")
+        let resize = Copy(video: Verdict(copy: false, reason: "resize"), audio: Verdict(copy: true))
+        #expect(CopyNote.text(Plan(copy: resize, copied: resize, lossless: false), passthrough: true)
+                == "Video is encoded: the frame size changes. Audio copies.")
+    }
+
     @Test func audioSourceShowsAWaveform() throws {
         let p = try #require(try builtins()["mp3"])
         var it = Item(id: UUID(), url: URL(fileURLWithPath: "/x/song.flac"))

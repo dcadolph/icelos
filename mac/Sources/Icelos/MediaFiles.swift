@@ -1,4 +1,5 @@
 import AppKit
+import IcelosCore
 import UniformTypeIdentifiers
 
 /// MediaFiles finds the video and audio files a user hands to the app.
@@ -38,6 +39,25 @@ enum MediaFiles {
         panel.allowedContentTypes = [.audiovisualContent, .folder]
         panel.prompt = "Add"
         if panel.runModal() == .OK { done(expand(panel.urls)) }
+    }
+
+    /// chooseAudio shows an open panel for audio files and passes the chosen ones to done.
+    @MainActor
+    static func chooseAudio(_ done: @escaping ([URL]) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = [.audio]
+        panel.prompt = "Add"
+        if panel.runModal() == .OK { done(panel.urls) }
+    }
+
+    /// chooseSubtitle shows an open panel for one text subtitle file and passes it to done.
+    @MainActor
+    static func chooseSubtitle(_ done: @escaping (URL) -> Void) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = Streams.subtitleExtensions.compactMap { UTType(filenameExtension: $0) }
+        panel.prompt = "Add"
+        if panel.runModal() == .OK, let url = panel.url { done(url) }
     }
 
     /// chooseFolder shows a folder picker and passes the folder to done.

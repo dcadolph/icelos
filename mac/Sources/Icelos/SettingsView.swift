@@ -12,6 +12,8 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.outputFolder) private var outputFolder = ""
     /// useMediaEngine is the stored media engine default.
     @AppStorage(AppSettings.Key.useMediaEngine) private var useMediaEngine = true
+    /// threads is the stored encoder thread cap, 0 for automatic.
+    @AppStorage(AppSettings.Key.threads) private var threads = 0
     /// colorScheme is the scheme the swatches preview.
     @Environment(\.colorScheme) private var colorScheme
 
@@ -78,6 +80,11 @@ struct SettingsView: View {
                 Button("Choose Folder…") { chooseFolder() }
             }
             Toggle("Use Media Engine by default", isOn: $useMediaEngine)
+            Stepper(value: $threads, in: 0...ProcessInfo.processInfo.activeProcessorCount) {
+                Text(threads == 0 ? "CPU limit: Automatic" : "CPU limit: \(threads) of \(ProcessInfo.processInfo.activeProcessorCount) cores")
+                    .monospacedDigit()
+            }
+            .help("Caps the threads a software encode uses, so the Mac stays responsive. Automatic lets ffmpeg decide.")
         }
         .foregroundStyle(Theme.text)
         .padding(20)
