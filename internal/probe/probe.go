@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -26,6 +27,12 @@ type Stream struct {
 	Height int `json:"height"`
 	// Channels is the channel count for audio streams.
 	Channels int `json:"channels"`
+	// SampleRate is the sample rate in hertz for audio streams, zero when unknown.
+	SampleRate int `json:"sample_rate,string,omitempty"`
+	// AvgFrameRate is the average frame rate of a video stream as a fraction, such as "30000/1001".
+	AvgFrameRate string `json:"avg_frame_rate,omitempty"`
+	// BaseFrameRate is the lowest frame rate that represents every timestamp, as a fraction.
+	BaseFrameRate string `json:"r_frame_rate,omitempty"`
 	// Disposition carries the stream role flags.
 	Disposition Disposition `json:"disposition"`
 	// SideData carries per-stream extras such as the display matrix.
@@ -58,6 +65,35 @@ func (s Stream) DisplaySize() (int, int) {
 		}
 	}
 	return s.Width, s.Height
+}
+
+// FrameRate returns the average frame rate in frames per second, falling back to the base rate,
+// or zero when ffprobe reported neither.
+func (s Stream) FrameRate() float64 {
+	for _, r := range []string{s.AvgFrameRate, s.BaseFrameRate} {
+		if fps := parseRate(r); fps > 0 {
+			return fps
+		}
+	}
+	return 0
+}
+
+// parseRate parses a frame rate fraction such as "30000/1001" or a plain number, returning zero
+// for anything else.
+func parseRate(r string) float64 {
+	num, den, found := strings.Cut(r, "/")
+	n, err := strconv.ParseFloat(num, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	if !found {
+		return n
+	}
+	d, err := strconv.ParseFloat(den, 64)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return n / d
 }
 
 // FirstVideo returns the first motion video stream.

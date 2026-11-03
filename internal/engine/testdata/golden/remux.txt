@@ -1,1 +1,1 @@
--hide_banner -nostdin -loglevel error -nostats -progress pipe:1 -y -i in.mov -map 0:0 -c:v copy -map 0:1 -c:a copy -map_metadata 0 -movflags +faststart out.mp4
+-hide_banner -nostdin -loglevel error -nostats -progress pipe:1 -y -i in.mov -map 0:0 -c:v copy -map 0:1 -c:a copy -map_metadata 0 -movflags +faststart -f mp4 out.mp4

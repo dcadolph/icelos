@@ -61,20 +61,20 @@ func TestBuild(t *testing.T) { //nolint:funlen // Test function.
 		Preset: "apple", Hardware: true, WantEncoder: "hevc_videotoolbox", WantHardware: true,
 		WantPasses: [][]string{slices.Concat(head, []string{"-map", "0:0", "-c:v", "hevc_videotoolbox",
 			"-pix_fmt", "yuv420p", "-tag:v", "hvc1", "-q:v", "65", "-map", "0:1", "-c:a", "aac_at",
-			"-b:a", "192000", "-map_metadata", "0", "-movflags", "+faststart", "out.mp4"})},
+			"-b:a", "192000", "-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"})},
 	}, { // Test 1: Web preset in software scales to 1080p and downmixes.
 		Preset: "web", WantEncoder: "libx264",
 		WantPasses: [][]string{slices.Concat(head, []string{"-map", "0:0", "-c:v", "libx264",
 			"-preset", "medium", "-vf", "scale=1920:1080", "-pix_fmt", "yuv420p", "-crf", "23",
 			"-map", "0:1", "-c:a", "aac_at", "-b:a", "128000", "-ac", "2",
-			"-map_metadata", "0", "-movflags", "+faststart", "out.mp4"})},
+			"-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"})},
 	}, { // Test 2: Hardware requested but missing falls to software and native AAC.
 		Preset: "tiny", Hardware: true, WantEncoder: "libx265",
 		Avail: func(s EncoderSet) EncoderSet { delete(s, "hevc_videotoolbox"); delete(s, "aac_at"); return s },
 		WantPasses: [][]string{slices.Concat(head, []string{"-map", "0:0", "-c:v", "libx265",
 			"-preset", "medium", "-vf", "scale=1280:720", "-pix_fmt", "yuv420p", "-tag:v", "hvc1",
 			"-crf", "29", "-x265-params", "log-level=error", "-map", "0:1", "-c:a", "aac",
-			"-b:a", "96000", "-ac", "2", "-map_metadata", "0", "-movflags", "+faststart", "out.mp4"})},
+			"-b:a", "96000", "-ac", "2", "-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"})},
 	}, { // Test 3: Target size runs two software passes even when hardware is preferred.
 		Preset: preset.TargetSizeID, TargetBytes: 10_000_000, Hardware: true, WantEncoder: "libx264",
 		WantPasses: [][]string{
@@ -84,18 +84,18 @@ func TestBuild(t *testing.T) { //nolint:funlen // Test function.
 			slices.Concat(head, []string{"-map", "0:0", "-c:v", "libx264", "-preset", "medium",
 				"-vf", "scale=1920:1080", "-pix_fmt", "yuv420p", "-b:v", "7632000",
 				"-pass", "2", "-passlogfile", "plog", "-map", "0:1", "-c:a", "aac_at",
-				"-b:a", "128000", "-ac", "2", "-map_metadata", "0", "-movflags", "+faststart", "out.mp4"}),
+				"-b:a", "128000", "-ac", "2", "-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"}),
 		},
 	}, { // Test 4: Remux copies both streams and tags HEVC.
 		Preset: "remux",
 		Info:   func(i probe.Info) probe.Info { i.Streams[0].Codec = "hevc"; return i },
 		WantPasses: [][]string{slices.Concat(head, []string{"-map", "0:0", "-c:v", "copy",
 			"-tag:v", "hvc1", "-map", "0:1", "-c:a", "copy",
-			"-map_metadata", "0", "-movflags", "+faststart", "out.mp4"})},
+			"-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"})},
 	}, { // Test 5: Audio preset maps only the audio stream.
 		Preset: "audio",
 		WantPasses: [][]string{slices.Concat(head, []string{"-map", "0:1", "-c:a", "aac_at",
-			"-b:a", "192000", "-map_metadata", "0", "-movflags", "+faststart", "out.mp4"})},
+			"-b:a", "192000", "-map_metadata", "0", "-movflags", "+faststart", "-f", "ipod", "out.mp4"})},
 	}, { // Test 6: MP3 skips cover art and faststart.
 		Preset: "mp3",
 		Info: func(probe.Info) probe.Info {
@@ -105,7 +105,7 @@ func TestBuild(t *testing.T) { //nolint:funlen // Test function.
 			}}
 		},
 		WantPasses: [][]string{slices.Concat(head, []string{"-map", "0:1", "-c:a", "libmp3lame",
-			"-b:a", "192000", "-map_metadata", "0", "out.mp4"})},
+			"-b:a", "192000", "-map_metadata", "0", "-f", "mp3", "out.mp4"})},
 	}, { // Test 7: Video preset on an audio file.
 		Preset: "apple", Want: ErrNoVideo,
 		Info: func(i probe.Info) probe.Info { i.Streams = i.Streams[1:]; return i },
@@ -120,7 +120,7 @@ func TestBuild(t *testing.T) { //nolint:funlen // Test function.
 		},
 		WantPasses: [][]string{slices.Concat(head, []string{"-map", "0:0", "-c:v", "libx264",
 			"-preset", "medium", "-pix_fmt", "yuv420p", "-crf", "20",
-			"-map_metadata", "0", "-movflags", "+faststart", "out.mp4"})},
+			"-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"})},
 	}, { // Test 10: Software encoder missing.
 		Preset: "web", Want: ErrMissingEncoder,
 		Avail: func(s EncoderSet) EncoderSet { delete(s, "libx264"); return s },
@@ -143,7 +143,7 @@ func TestBuild(t *testing.T) { //nolint:funlen // Test function.
 			slices.Concat(head, []string{"-map", "0:0", "-c:v", "libx265", "-preset", "medium",
 				"-vf", "scale=1280:720", "-pix_fmt", "yuv420p", "-tag:v", "hvc1", "-b:v", "3784000",
 				"-x265-params", "pass=2:stats=plog:log-level=error", "-map", "0:1", "-c:a", "aac_at",
-				"-b:a", "96000", "-ac", "2", "-map_metadata", "0", "-movflags", "+faststart", "out.mp4"}),
+				"-b:a", "96000", "-ac", "2", "-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"}),
 		},
 	}, { // Test 16: Portrait phone video scales inside the rotated box.
 		Preset: "web", WantEncoder: "libx264",
@@ -154,7 +154,7 @@ func TestBuild(t *testing.T) { //nolint:funlen // Test function.
 		WantPasses: [][]string{slices.Concat(head, []string{"-map", "0:0", "-c:v", "libx264",
 			"-preset", "medium", "-vf", "scale=1080:1920", "-pix_fmt", "yuv420p", "-crf", "23",
 			"-map", "0:1", "-c:a", "aac_at", "-b:a", "128000", "-ac", "2",
-			"-map_metadata", "0", "-movflags", "+faststart", "out.mp4"})},
+			"-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"})},
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
@@ -272,13 +272,5 @@ func TestQualityIndex(t *testing.T) {
 				t.Errorf("index = %d, want %d", got, test.WantIndex)
 			}
 		})
-	}
-}
-
-func TestAudioCodecArgsInvalid(t *testing.T) {
-	t.Parallel()
-	_, err := audioCodecArgs(format.Audio{Codec: "vorbis"}, probe.Stream{}, testAvail())
-	if !errors.Is(err, preset.ErrInvalid) {
-		t.Errorf("error = %v, want %v", err, preset.ErrInvalid)
 	}
 }

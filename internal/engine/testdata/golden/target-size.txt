@@ -1,2 +1,2 @@
 -hide_banner -nostdin -loglevel error -nostats -progress pipe:1 -y -i in.mov -map 0:0 -c:v libx264 -preset medium -pix_fmt yuv420p -b:v 4183111 -pass 1 -passlogfile passlog -an -f null /dev/null
--hide_banner -nostdin -loglevel error -nostats -progress pipe:1 -y -i in.mov -map 0:0 -c:v libx264 -preset medium -pix_fmt yuv420p -b:v 4183111 -pass 2 -passlogfile passlog -map 0:1 -c:a aac_at -b:a 128000 -ac 2 -map_metadata 0 -movflags +faststart out.mp4
+-hide_banner -nostdin -loglevel error -nostats -progress pipe:1 -y -i in.mov -map 0:0 -c:v libx264 -preset medium -pix_fmt yuv420p -b:v 4183111 -pass 2 -passlogfile passlog -map 0:1 -c:a aac_at -b:a 128000 -ac 2 -map_metadata 0 -movflags +faststart -f mp4 out.mp4

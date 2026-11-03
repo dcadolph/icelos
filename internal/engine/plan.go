@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/dcadolph/icelos/internal/format"
-	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/probe"
 )
 
@@ -22,30 +21,6 @@ type Plan struct {
 	// Hardware is true when Encoder is a VideoToolbox encoder.
 	Hardware bool
 }
-
-// codecEncoders names the software and hardware encoder for one codec.
-type codecEncoders struct {
-	// Software is the CPU encoder name.
-	Software string
-	// Hardware is the VideoToolbox encoder name.
-	Hardware string
-}
-
-// Encoder tables keyed by catalog codec ID. Quality values are indexed by format.Quality
-// minus one.
-var (
-	videoEncoders = map[string]codecEncoders{ //nolint:gochecknoglobals // Read-only table.
-		"h264": {Software: "libx264", Hardware: "h264_videotoolbox"},
-		"hevc": {Software: "libx265", Hardware: "hevc_videotoolbox"},
-	}
-	qualityScale = map[string][3]int{ //nolint:gochecknoglobals // Read-only table.
-		"libx264":           {20, 23, 27},
-		"libx265":           {22, 26, 29},
-		"h264_videotoolbox": {70, 60, 48},
-		"hevc_videotoolbox": {65, 55, 42},
-	}
-	movFamily = []string{"mp4", "m4v", "m4a", "mov"} //nolint:gochecknoglobals // Read-only table.
-)
 
 // Bitrate budget for target-size encodes.
 const (
@@ -71,11 +46,16 @@ func TargetVideoBitrate(target int64, dur time.Duration, audioBps int) (int, err
 }
 
 // Build plans the ffmpeg passes that turn job.Input into dest. Two-pass encodes write their
-// statistics under passlog. When job.Hardware is set and avail offers a VideoToolbox encoder
-// for the codec, the plan uses it, except for target-size encodes, which need two passes.
+// statistics under passlog. The video encoder is the first one avail offers in the codec's
+// catalog order that can honor the settings. When job.Hardware is set, a VideoToolbox encoder
+// comes first, except for two-pass encodes, which VideoToolbox cannot run.
 func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string) (Plan, error) {
 	p := job.Preset
 	if err := p.Validate(); err != nil {
+		return Plan{}, err
+	}
+	box, err := format.ContainerByID(p.Container)
+	if err != nil {
 		return Plan{}, err
 	}
 	video, hasVideo := info.FirstVideo()
@@ -90,6 +70,7 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string) (Pl
 
 	head := []string{"-hide_banner", "-nostdin", "-loglevel", "error", "-nostats",
 		"-progress", "pipe:1", "-y", "-i", job.Input}
+	tail := muxArgs(box, dest)
 	var mapVideo, mapAudio []string
 	if p.HasVideo() {
 		mapVideo = []string{"-map", "0:" + strconv.Itoa(video.Index)}
@@ -97,114 +78,425 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string) (Pl
 	if useAudio {
 		mapAudio = []string{"-map", "0:" + strconv.Itoa(audio.Index)}
 	}
+
+	var (
+		vplan videoPlan
+		fps   float64
+	)
+	if p.HasVideo() && p.Video.Codec != format.Copy {
+		if vplan, err = planVideo(box, p.Video, video, avail, job.Hardware); err != nil {
+			return Plan{}, err
+		}
+		fps = vplan.Frame.FPS
+	}
 	var audioArgs []string
 	if useAudio {
-		var err error
-		if audioArgs, err = audioCodecArgs(p.Audio, audio, avail); err != nil {
+		if audioArgs, err = planAudio(box, p.Audio, audio, fps, avail); err != nil {
 			return Plan{}, err
 		}
 	}
-	tail := []string{"-map_metadata", "0"}
-	if slices.Contains(movFamily, p.Ext()) {
-		tail = append(tail, "-movflags", "+faststart")
-	}
-	tail = append(tail, dest)
 
-	if !p.HasVideo() {
+	switch {
+	case !p.HasVideo():
 		return Plan{Passes: [][]string{slices.Concat(head, mapAudio, audioArgs, tail)}}, nil
-	}
-	if p.Video.Codec == format.Copy {
+	case p.Video.Codec == format.Copy:
 		vargs := []string{"-c:v", "copy"}
-		if video.Codec == "hevc" && slices.Contains(movFamily, p.Ext()) {
+		if box.Flags.HVC1Tag && video.Codec == "hevc" {
 			vargs = append(vargs, "-tag:v", "hvc1")
 		}
-		return Plan{Passes: [][]string{slices.Concat(head, mapVideo, vargs, mapAudio, audioArgs, tail)}}, nil
+		pass := slices.Concat(head, mapVideo, vargs, mapAudio, audioArgs, tail)
+		return Plan{Passes: [][]string{pass}}, nil
 	}
 
-	names := videoEncoders[p.Video.Codec]
-	enc, hw := names.Software, false
-	if job.Hardware && p.TargetBytes == 0 && avail.Has(names.Hardware) {
-		enc, hw = names.Hardware, true
+	plan := Plan{Encoder: vplan.Name, Hardware: vplan.Hardware}
+	spec := videoSpec{Video: p.Video, Bitrate: p.Video.Bitrate, PassLog: passlog}
+	if spec.Bitrate == 0 {
+		spec.Bitrate = vplan.Frame.Bitrate
 	}
-	if !avail.Has(enc) {
-		return Plan{}, fmt.Errorf("%w: %s", ErrMissingEncoder, enc)
-	}
-	vargs := []string{"-c:v", enc}
-	if !hw {
-		vargs = append(vargs, "-preset", "medium")
-	}
-	w, h := video.DisplaySize()
-	if nw, nh, ok := fit(w, h, p.Video.MaxWidth, p.Video.MaxHeight); ok {
-		vargs = append(vargs, "-vf", fmt.Sprintf("scale=%d:%d", nw, nh))
-	}
-	vargs = append(vargs, "-pix_fmt", "yuv420p")
-	if p.Video.Codec == "hevc" && slices.Contains(movFamily, p.Ext()) {
-		vargs = append(vargs, "-tag:v", "hvc1")
-	}
-	plan := Plan{Encoder: enc, Hardware: hw}
-
-	if p.TargetBytes == 0 {
-		q := qualityScale[enc][qualityIndex(p.Video.Quality)]
-		if hw {
-			vargs = append(vargs, "-q:v", strconv.Itoa(q))
-		} else {
-			vargs = append(vargs, "-crf", strconv.Itoa(q))
-		}
-		if enc == "libx265" {
-			vargs = append(vargs, "-x265-params", "log-level=error")
-		}
+	if p.Video.RateControl != format.RateTwoPass {
+		vargs := slices.Concat(vplan.Head, vplan.Encoder.Args(spec))
 		plan.Passes = [][]string{slices.Concat(head, mapVideo, vargs, mapAudio, audioArgs, tail)}
 		return plan, nil
 	}
 
-	audioBps := 0
-	if useAudio {
-		audioBps = p.Audio.Bitrate
-	}
-	bps, err := TargetVideoBitrate(p.TargetBytes, info.Duration, audioBps)
-	if err != nil {
-		return Plan{}, err
-	}
-	vargs = append(vargs, "-b:v", strconv.Itoa(bps))
-	pass := func(n int) []string {
-		if enc == "libx265" {
-			return []string{"-x265-params", fmt.Sprintf("pass=%d:stats=%s:log-level=error", n, passlog)}
+	if p.TargetBytes > 0 {
+		audioBps := 0
+		if useAudio {
+			audioBps = p.Audio.Bitrate
 		}
-		return []string{"-pass", strconv.Itoa(n), "-passlogfile", passlog}
+		if spec.Bitrate, err = TargetVideoBitrate(p.TargetBytes, info.Duration, audioBps); err != nil {
+			return Plan{}, err
+		}
 	}
-	first := slices.Concat(head, mapVideo, vargs, pass(1), []string{"-an", "-f", "null", os.DevNull})
-	second := slices.Concat(head, mapVideo, vargs, pass(2), mapAudio, audioArgs, tail)
+	pass := func(n int) []string {
+		spec.Pass = n
+		return slices.Concat(vplan.Head, vplan.Encoder.Args(spec))
+	}
+	first := slices.Concat(head, mapVideo, pass(1), []string{"-an", "-f", "null", os.DevNull})
+	second := slices.Concat(head, mapVideo, pass(2), mapAudio, audioArgs, tail)
 	plan.Passes = [][]string{first, second}
 	return plan, nil
 }
 
-// audioCodecArgs returns the ffmpeg audio codec arguments for a and the source stream src.
-func audioCodecArgs(a format.Audio, src probe.Stream, avail EncoderSet) ([]string, error) {
-	var args []string
-	switch a.Codec {
-	case format.Copy:
-		return []string{"-c:a", "copy"}, nil
-	case "aac":
-		name := "aac"
-		if avail.Has("aac_at") {
-			name = "aac_at"
-		}
-		args = []string{"-c:a", name}
-	case "mp3":
-		if !avail.Has("libmp3lame") {
-			return nil, fmt.Errorf("%w: libmp3lame", ErrMissingEncoder)
-		}
-		args = []string{"-c:a", "libmp3lame"}
-	default:
-		return nil, fmt.Errorf("%w: audio codec %q", preset.ErrInvalid, a.Codec)
+// videoPlan is the chosen encoder and frame settings for an encoded video stream.
+type videoPlan struct {
+	// Name is the ffmpeg encoder name.
+	Name string
+	// Encoder is how icelos drives the encoder.
+	Encoder videoEncoder
+	// Hardware is true when the encoder is a VideoToolbox encoder.
+	Hardware bool
+	// Frame is the output frame shape.
+	Frame frame
+	// Head holds -c:v, the encoder setup, and the frame arguments, which every pass shares.
+	Head []string
+}
+
+// planVideo picks the encoder and frame settings that turn the source stream src into v inside
+// container box. Hardware asks for a VideoToolbox encoder where one can honor v.
+func planVideo(box format.Container, v format.Video, src probe.Stream, avail EncoderSet,
+	hardware bool) (videoPlan, error) {
+	codec, err := format.CodecByID(v.Codec)
+	if err != nil {
+		return videoPlan{}, err
 	}
+	f, err := frameFor(box, codec, v, src)
+	if err != nil {
+		return videoPlan{}, err
+	}
+	vp, err := pickVideoEncoder(box, codec, v, avail, hardware && v.RateControl != format.RateTwoPass)
+	if err != nil {
+		return videoPlan{}, err
+	}
+	enc := vp.Encoder
+	head := append([]string{"-c:v", vp.Name}, enc.Setup...)
+	if f.Scale != "" {
+		head = append(head, "-vf", f.Scale)
+	}
+	if f.FPS > 0 {
+		head = append(head, "-r", rateArg(f.FPS))
+	}
+	if pix := f.PixFmt; pix != "" {
+		if renamed, ok := enc.PixFmts[pix]; ok {
+			pix = renamed
+		}
+		head = append(head, "-pix_fmt", pix)
+	}
+	switch {
+	case box.Flags.HVC1Tag && codec.ID == "hevc":
+		head = append(head, "-tag:v", "hvc1")
+	case v.Tag != "":
+		head = append(head, "-tag:v", v.Tag)
+	}
+	vp.Frame, vp.Head = f, head
+	return vp, nil
+}
+
+// pickVideoEncoder returns a plan holding the first encoder for codec that avail offers, icelos
+// can drive, box can carry, and that accepts v, trying VideoToolbox encoders first when hardware
+// is set. The plan's frame and head are left for the caller.
+func pickVideoEncoder(box format.Container, codec format.Codec, v format.Video, avail EncoderSet,
+	hardware bool) (videoPlan, error) {
+	pick := func(hw bool) (videoPlan, bool) {
+		for _, e := range codec.Encoders {
+			enc, ok := videoEncoders[e.Name]
+			switch {
+			case e.Hardware != hw, !ok, !avail.Has(e.Name):
+			case enc.Accepts != nil && !enc.Accepts(v):
+			case slices.Contains(enc.RefusedBy, box.Muxer):
+			default:
+				return videoPlan{Name: e.Name, Encoder: enc, Hardware: hw}, true
+			}
+		}
+		return videoPlan{}, false
+	}
+	if hardware {
+		if vp, ok := pick(true); ok {
+			return vp, nil
+		}
+	}
+	if vp, ok := pick(false); ok {
+		return vp, nil
+	}
+	return videoPlan{}, fmt.Errorf("%w: %s", ErrMissingEncoder, preferred(codec))
+}
+
+// preferred returns the name of the codec's first software encoder, or its first encoder.
+func preferred(codec format.Codec) string {
+	for _, e := range codec.Encoders {
+		if !e.Hardware {
+			return e.Name
+		}
+	}
+	if len(codec.Encoders) != 0 {
+		return codec.Encoders[0].Name
+	}
+	return codec.ID
+}
+
+// frame is the output frame shape of an encoded video stream.
+type frame struct {
+	// Scale is the scale filter, empty to keep the source size.
+	Scale string
+	// FPS is the output frame rate, zero to keep the source rate.
+	FPS float64
+	// PixFmt is the catalog pixel format, empty to let the encoder choose.
+	PixFmt string
+	// Bitrate is the bitrate a fixed mode needs when the settings leave it open.
+	Bitrate int
+}
+
+// frameFor returns the frame shape that turns the source stream src into v. Codecs and
+// containers with fixed modes get the mode closest to the source when v leaves it open.
+func frameFor(box format.Container, codec format.Codec, v format.Video,
+	src probe.Stream) (frame, error) {
+	w, h := src.DisplaySize()
+	srcFPS := src.FrameRate()
+	f := frame{FPS: v.FPS, PixFmt: codec.PixFmt}
+	if prof, ok := codec.ProfileByID(v.Profile); ok && prof.PixFmt != "" {
+		f.PixFmt = prof.PixFmt
+	}
+	modes := box.Modes
+	if codec.Fixed(v.Profile) {
+		modes = codec.Modes
+	}
+	switch {
+	case len(modes) != 0:
+		m, err := pickMode(modes, v, w, h, srcFPS)
+		if err != nil {
+			return frame{}, fmt.Errorf("%w: %s in %s", err, codec.ID, box.ID)
+		}
+		if w != m.Width || h != m.Height {
+			f.Scale = fmt.Sprintf("scale=%d:%d", m.Width, m.Height)
+		}
+		if f.FPS == 0 {
+			f.FPS = m.FPS
+		}
+		if m.PixFmt != "" {
+			f.PixFmt = m.PixFmt
+		}
+		if v.Bitrate == 0 && len(m.Bitrates) != 0 {
+			f.Bitrate = m.Bitrates[len(m.Bitrates)/2]
+		}
+	case v.Width != 0 && v.Height != 0:
+		if w != v.Width || h != v.Height {
+			f.Scale = fmt.Sprintf("scale=%d:%d", v.Width, v.Height)
+		}
+	case v.Width != 0:
+		if w != v.Width {
+			f.Scale = fmt.Sprintf("scale=%d:-2", v.Width)
+		}
+	case v.Height != 0:
+		if h != v.Height {
+			f.Scale = fmt.Sprintf("scale=-2:%d", v.Height)
+		}
+	default:
+		if nw, nh, ok := fit(w, h, v.MaxWidth, v.MaxHeight); ok {
+			f.Scale = fmt.Sprintf("scale=%d:%d", nw, nh)
+		}
+	}
+	if f.FPS == 0 && len(codec.FrameRates) != 0 && (srcFPS == 0 || !codec.AllowsFrameRate(srcFPS)) {
+		f.FPS = nearestRate(codec.FrameRates, srcFPS)
+	}
+	return f, nil
+}
+
+// pickMode returns the mode that v allows and that is closest to the source: the same frame rate
+// family (25 and 50 fps sources are PAL, the rest NTSC), then the nearest frame area, then table
+// order.
+func pickMode(modes []format.Mode, v format.Video, w, h int, fps float64) (format.Mode, error) {
+	pal := format.SameRate(fps, 25) || format.SameRate(fps, 50)
+	best, bestScore := format.Mode{}, math.Inf(1)
+	for _, m := range modes {
+		if !modeAllows(m, v) {
+			continue
+		}
+		score := 0.0
+		if m.FPS != 0 && format.SameRate(m.FPS, 25) != pal {
+			score += modeFamilyPenalty
+		}
+		if w > 0 && h > 0 {
+			score += math.Abs(math.Log(float64(m.Width*m.Height) / float64(w*h)))
+		}
+		if score < bestScore {
+			best, bestScore = m, score
+		}
+	}
+	if math.IsInf(bestScore, 1) {
+		return format.Mode{}, format.ErrMode
+	}
+	return best, nil
+}
+
+// modeFamilyPenalty outweighs any frame area difference, so a mode in the source's frame rate
+// family always wins over one outside it.
+const modeFamilyPenalty = 100
+
+// modeAllows reports whether mode m fits the profile and every frame setting v pins.
+func modeAllows(m format.Mode, v format.Video) bool {
+	switch {
+	case m.Profile != "" && m.Profile != v.Profile:
+	case v.Width != 0 && v.Width != m.Width, v.Height != 0 && v.Height != m.Height:
+	case v.FPS != 0 && m.FPS != 0 && !format.SameRate(v.FPS, m.FPS):
+	case v.Bitrate != 0 && len(m.Bitrates) != 0 && !slices.Contains(m.Bitrates, v.Bitrate):
+	default:
+		return true
+	}
+	return false
+}
+
+// nearestRate returns the rate in rates closest to fps, treating an unknown rate as 30.
+func nearestRate(rates []float64, fps float64) float64 {
+	if fps <= 0 {
+		fps = 30
+	}
+	best := rates[0]
+	for _, r := range rates[1:] {
+		if math.Abs(r-fps) < math.Abs(best-fps) {
+			best = r
+		}
+	}
+	return best
+}
+
+// rateArg formats a frame rate for -r, writing the NTSC rates as exact fractions.
+func rateArg(fps float64) string {
+	for _, base := range []int{24, 30, 48, 60, 120, 240} {
+		if format.SameRate(fps, float64(base)*1000/1001) {
+			return strconv.Itoa(base*1000) + "/1001"
+		}
+	}
+	return strconv.FormatFloat(fps, 'f', -1, 64)
+}
+
+// planAudio returns the audio arguments that turn the source stream src into a inside container
+// box. Fps is the output video frame rate, zero when there is no video or it follows the source.
+func planAudio(box format.Container, a format.Audio, src probe.Stream, fps float64,
+	avail EncoderSet) ([]string, error) {
+	if a.Codec == format.Copy {
+		return []string{"-c:a", "copy"}, nil
+	}
+	codec, err := format.CodecByID(a.Codec)
+	if err != nil {
+		return nil, err
+	}
+	rate := sampleRate(box, codec, a, src)
+	effective := rate
+	if effective == 0 {
+		effective = src.SampleRate
+	}
+	name, enc, err := pickAudioEncoder(codec, a, effective, avail)
+	if err != nil {
+		return nil, err
+	}
+	args := []string{"-c:a", name}
 	if a.Bitrate > 0 {
 		args = append(args, "-b:a", strconv.Itoa(a.Bitrate))
 	}
-	if a.Channels > 0 && src.Channels > a.Channels {
-		args = append(args, "-ac", strconv.Itoa(a.Channels))
+	if n := channels(box, codec, a, src); n > 0 {
+		args = append(args, "-ac", strconv.Itoa(n))
+	}
+	if rate > 0 {
+		args = append(args, "-ar", strconv.Itoa(rate))
+	}
+	if enc.Args != nil {
+		args = append(args, enc.Args(a, fps)...)
 	}
 	return args, nil
+}
+
+// pickAudioEncoder returns the first encoder for codec that avail offers, icelos can drive, and
+// that accepts a at the sample rate, which is zero when unknown.
+func pickAudioEncoder(codec format.Codec, a format.Audio, rate int, avail EncoderSet) (string, audioEncoder, error) {
+	for _, e := range codec.Encoders {
+		enc, ok := audioEncoders[e.Name]
+		switch {
+		case !ok, !avail.Has(e.Name):
+		case e.MaxSampleRate > 0 && rate > e.MaxSampleRate:
+		case enc.Accepts != nil && !enc.Accepts(a):
+		default:
+			return e.Name, enc, nil
+		}
+	}
+	return "", audioEncoder{}, fmt.Errorf("%w: %s", ErrMissingEncoder, preferred(codec))
+}
+
+// sampleRate returns the -ar value for a, or zero to keep the source rate. A source rate that
+// the codec or container refuses is moved to the nearest one they take. When the source rate is
+// unknown, a rate is forced only where the container restricts it or the codec has one rate.
+func sampleRate(box format.Container, codec format.Codec, a format.Audio, src probe.Stream) int {
+	if a.SampleRate > 0 {
+		return a.SampleRate
+	}
+	allowed := codec.SampleRates
+	if len(box.SampleRates) != 0 {
+		allowed = slices.DeleteFunc(slices.Clone(box.SampleRates), func(r int) bool {
+			return len(codec.SampleRates) != 0 && !slices.Contains(codec.SampleRates, r)
+		})
+	}
+	switch {
+	case len(allowed) == 0:
+		return 0
+	case src.SampleRate > 0 && slices.Contains(allowed, src.SampleRate):
+		return 0
+	case src.SampleRate == 0 && len(allowed) > 1 && len(box.SampleRates) == 0:
+		return 0
+	}
+	want := src.SampleRate
+	if want == 0 {
+		want = defaultSampleRate
+	}
+	best := allowed[0]
+	for _, r := range allowed[1:] {
+		if abs(r-want) < abs(best-want) {
+			best = r
+		}
+	}
+	return best
+}
+
+// defaultSampleRate is the rate a forced choice aims for when the source rate is unknown.
+const defaultSampleRate = 48000
+
+// abs returns the absolute value of n.
+func abs(n int) int {
+	return max(n, -n)
+}
+
+// channels returns the -ac value for a, or zero to keep the source layout. The container's fixed
+// count wins, then the settings' cap, then the codec's.
+func channels(box format.Container, codec format.Codec, a format.Audio, src probe.Stream) int {
+	if box.Channels != 0 {
+		if src.Channels != box.Channels {
+			return box.Channels
+		}
+		return 0
+	}
+	limit := a.Channels
+	if limit == 0 {
+		limit = codec.MaxChannels
+	}
+	if limit > 0 && src.Channels > limit {
+		return limit
+	}
+	return 0
+}
+
+// muxArgs returns the output arguments that end every final pass: metadata, the container's
+// muxer flags, the muxer itself, and the destination. Naming the muxer keeps extensions ffmpeg
+// does not know, such as .m4r and .trp, working.
+func muxArgs(box format.Container, dest string) []string {
+	args := []string{"-map_metadata", "0"}
+	if box.Flags.Faststart {
+		args = append(args, "-movflags", "+faststart")
+	}
+	if box.Flags.M2TS {
+		args = append(args, "-mpegts_m2ts_mode", "1")
+	}
+	if box.Flags.Shortest {
+		args = append(args, "-shortest")
+	}
+	return append(args, "-f", box.Muxer, dest)
 }
 
 // qualityIndex maps q to a quality table index, treating unset as balanced.

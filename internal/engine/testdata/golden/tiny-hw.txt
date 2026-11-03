@@ -1,1 +1,1 @@
--hide_banner -nostdin -loglevel error -nostats -progress pipe:1 -y -i in.mov -map 0:0 -c:v hevc_videotoolbox -vf scale=1280:720 -pix_fmt yuv420p -tag:v hvc1 -q:v 42 -map 0:1 -c:a aac_at -b:a 96000 -ac 2 -map_metadata 0 -movflags +faststart out.mp4
+-hide_banner -nostdin -loglevel error -nostats -progress pipe:1 -y -i in.mov -map 0:0 -c:v hevc_videotoolbox -vf scale=1280:720 -pix_fmt yuv420p -tag:v hvc1 -q:v 42 -map 0:1 -c:a aac_at -b:a 96000 -ac 2 -map_metadata 0 -movflags +faststart -f mp4 out.mp4

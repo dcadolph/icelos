@@ -1,1 +1,1 @@
--hide_banner -nostdin -loglevel error -nostats -progress pipe:1 -y -i in.mov -map 0:1 -c:a libmp3lame -b:a 192000 -ac 2 -map_metadata 0 out.mp3
+-hide_banner -nostdin -loglevel error -nostats -progress pipe:1 -y -i in.mov -map 0:1 -c:a libmp3lame -b:a 192000 -ac 2 -map_metadata 0 -f mp3 out.mp3

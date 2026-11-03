@@ -3,6 +3,7 @@ package probe
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -34,6 +35,16 @@ func TestParse(t *testing.T) {
 		In: `{"format":{"duration":"abc"}}`, Want: ErrProbe,
 	}, { // Test 3: Missing duration and size are zero.
 		In: `{"format":{"format_name":"wav"}}`, WantInfo: Info{Format: "wav"},
+	}, { // Test 4: Sample rate and frame rates.
+		In: `{"streams":[{"index":0,"codec_type":"video","avg_frame_rate":"30000/1001",` +
+			`"r_frame_rate":"30000/1001"},{"index":1,"codec_type":"audio","sample_rate":"44100",` +
+			`"avg_frame_rate":"0/0","r_frame_rate":"0/0"}]}`,
+		WantInfo: Info{Streams: []Stream{
+			{Index: 0, Kind: "video", AvgFrameRate: "30000/1001", BaseFrameRate: "30000/1001"},
+			{Index: 1, Kind: "audio", SampleRate: 44100, AvgFrameRate: "0/0", BaseFrameRate: "0/0"},
+		}},
+	}, { // Test 5: A sample rate that is not a number.
+		In: `{"streams":[{"index":0,"codec_type":"audio","sample_rate":"fast"}]}`, Want: ErrProbe,
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
@@ -102,6 +113,30 @@ func TestStreamHelpers(t *testing.T) {
 			w, h := v.DisplaySize()
 			if diff := cmp.Diff([2]int{test.WantWidth, test.WantHeight}, [2]int{w, h}); diff != "" {
 				t.Errorf("size mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestFrameRate(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		In      Stream
+		WantFPS float64
+	}{
+		{In: Stream{AvgFrameRate: "30000/1001"}, WantFPS: 30000.0 / 1001},               // Test 0: NTSC.
+		{In: Stream{AvgFrameRate: "0/0", BaseFrameRate: "25/1"}, WantFPS: 25},           // Test 1: Base rate fallback.
+		{In: Stream{AvgFrameRate: "24"}, WantFPS: 24},                                   // Test 2: Plain number.
+		{In: Stream{AvgFrameRate: "30/0"}, WantFPS: 0},                                  // Test 3: Zero denominator.
+		{In: Stream{AvgFrameRate: "x/1", BaseFrameRate: "-5/1"}, WantFPS: 0},            // Test 4: Garbage.
+		{In: Stream{}, WantFPS: 0},                                                      // Test 5: Unknown.
+		{In: Stream{AvgFrameRate: "60000/1001", BaseFrameRate: "60/1"}, WantFPS: 59.94}, // Test 6: Average wins.
+	}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			if got := test.In.FrameRate(); math.Abs(got-test.WantFPS) > 0.01 {
+				t.Errorf("fps = %g, want %g", got, test.WantFPS)
 			}
 		})
 	}
