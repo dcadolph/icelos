@@ -39,13 +39,13 @@ nothing behind.`,
 			if out != "" && len(args) > 1 {
 				return fmt.Errorf("%w: --output takes a single input, got %d", errUsage, len(args))
 			}
-			enc, _ := newEngine()
+			enc, prober := newEngine()
 			prog := newProgressPrinter(cmd.ErrOrStderr())
-			q := queue.WithWorkers(enc, max(1, config.Workers()), prog.Print)
+			q := queue.WithWorkers(enc, prober, max(1, config.Workers()), prog.Print)
 			for _, in := range args {
 				job := engine.Job{Input: in, Output: out, Preset: p, Hardware: config.Hardware(),
 					Overwrite: config.Overwrite()}
-				if _, err := q.Add(job, config.OutDir()); err != nil {
+				if _, err := q.Add(cmd.Context(), job, config.OutDir()); err != nil {
 					return fmt.Errorf("%s: %w", in, err)
 				}
 			}

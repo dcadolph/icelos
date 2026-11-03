@@ -92,6 +92,8 @@ type Request struct {
 	Overwrite bool `json:"overwrite,omitempty"`
 	// Streams chooses the tracks, subtitles, chapters, metadata, and threads for add and plan.
 	Streams engine.Streams `json:"streams,omitzero"`
+	// SplitChapters makes add queue one job per chapter of the input.
+	SplitChapters bool `json:"splitChapters,omitempty"`
 	// Job is the job ID to cancel.
 	Job string `json:"job,omitempty"`
 }
@@ -121,9 +123,9 @@ type Message struct {
 	Info *probe.Info `json:"info,omitempty"`
 	// Plan is the answer to a plan request.
 	Plan *Plan `json:"plan,omitempty"`
-	// Status is one job snapshot.
+	// Status is one job snapshot. For add it is the first job the request became.
 	Status *queue.Status `json:"status,omitempty"`
-	// Jobs lists every job.
+	// Jobs lists every job for list, and for add every job a split request became.
 	Jobs []queue.Status `json:"jobs,omitempty"`
 }
 
@@ -219,7 +221,7 @@ func New(w io.Writer, cfg Config) *Server {
 		panic("serve.New: Encoder, Prober, Encoders, and Presets required")
 	}
 	s := &Server{cfg: cfg, out: json.NewEncoder(w)}
-	s.q = queue.WithWorkers(cfg.Encoder, max(1, cfg.Workers), func(st queue.Status) {
+	s.q = queue.WithWorkers(cfg.Encoder, cfg.Prober, max(1, cfg.Workers), func(st queue.Status) {
 		s.send(Message{Type: TypeJob, Status: &st})
 	})
 	return s
@@ -324,12 +326,15 @@ func (s *Server) handle(ctx context.Context, req Request, wg *sync.WaitGroup) {
 			s.fail(req.ID, err)
 			return
 		}
-		st, err := s.q.Add(job, req.OutDir)
+		group, err := s.q.Add(ctx, job, req.OutDir)
 		if err != nil {
 			s.fail(req.ID, err)
 			return
 		}
-		m := Message{Type: req.Op, Reply: req.ID, Status: &st}
+		m := Message{Type: req.Op, Reply: req.ID, Status: &group[0]}
+		if len(group) > 1 {
+			m.Jobs = group
+		}
 		if req.PresetBody == nil {
 			if err := s.cfg.Presets.Use(job.Preset.ID); err != nil {
 				m.Warning = err.Error()
@@ -406,7 +411,7 @@ func (s *Server) jobFor(req Request) (engine.Job, error) {
 	}
 	hw := req.Hardware == nil || *req.Hardware
 	return engine.Job{Input: req.Input, Output: req.Output, Preset: p, Hardware: hw,
-		Overwrite: req.Overwrite, Streams: req.Streams}, nil
+		Overwrite: req.Overwrite, Streams: req.Streams, SplitChapters: req.SplitChapters}, nil
 }
 
 // plan probes job's input and external audio and returns what converting it would run. The

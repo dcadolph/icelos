@@ -64,6 +64,9 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //n
 	if err := job.Streams.Validate(); err != nil {
 		return Plan{}, err
 	}
+	if err := job.Range.Validate(); err != nil {
+		return Plan{}, err
+	}
 	box, err := format.ContainerByID(p.Container)
 	if err != nil {
 		return Plan{}, err
@@ -79,10 +82,12 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //n
 	if !p.HasVideo() && len(lay.Audio) == 0 {
 		return Plan{}, fmt.Errorf("%w: %s", ErrNoAudio, job.Input)
 	}
+	lay.Burn.Filter = shiftBurn(lay.Burn.Filter, job.Range.Start)
 
-	head := []string{"-hide_banner", "-nostdin", "-loglevel", "error", "-nostats",
-		"-progress", "pipe:1", "-y", "-i", job.Input}
-	final := slices.Concat(head, inputArgs(lay.Inputs))
+	ranged := job.Range.args()
+	head := slices.Concat([]string{"-hide_banner", "-nostdin", "-loglevel", "error", "-nostats",
+		"-progress", "pipe:1", "-y"}, ranged, []string{"-i", job.Input})
+	final := slices.Concat(head, inputArgs(lay.Inputs, ranged))
 	threads := threadArgs(job.Streams)
 	tail := slices.Concat(subtitleOutputArgs(lay), threads, muxArgs(box, job.Streams, dest))
 
@@ -138,7 +143,8 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //n
 		if len(lay.Audio) != 0 {
 			audioBps = p.Audio.Bitrate * len(lay.Audio)
 		}
-		if spec.Bitrate, err = TargetVideoBitrate(p.TargetBytes, info.Duration, audioBps); err != nil {
+		span := job.Range.Span(info.Duration)
+		if spec.Bitrate, err = TargetVideoBitrate(p.TargetBytes, span, audioBps); err != nil {
 			return Plan{}, err
 		}
 	}
@@ -150,6 +156,17 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //n
 	second := slices.Concat(final, mapVideo, pass(2), mapAudio, audioArgs, tail)
 	plan.Passes = [][]string{first, second}
 	return plan, nil
+}
+
+// shiftBurn returns the subtitles filter f adjusted for an input read from start. The filter
+// opens its file on its own and reads it from the beginning, while the seeked frames are stamped
+// from zero, so the frames are moved back onto the file's timeline for the filter and then
+// returned to zero. An empty filter or a zero start is returned unchanged.
+func shiftBurn(f string, start time.Duration) string {
+	if f == "" || start <= 0 {
+		return f
+	}
+	return "setpts=PTS+" + seconds(start) + "/TB," + f + ",setpts=PTS-STARTPTS"
 }
 
 // videoPlan is the chosen encoder and frame settings for an encoded video stream.

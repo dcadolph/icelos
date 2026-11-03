@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -270,6 +272,104 @@ func TestQualityIndex(t *testing.T) {
 			t.Parallel()
 			if got := qualityIndex(test.In); got != test.WantIndex {
 				t.Errorf("index = %d, want %d", got, test.WantIndex)
+			}
+		})
+	}
+}
+
+func TestBuildRange(t *testing.T) { //nolint:funlen // Test function.
+	t.Parallel()
+	web := testPreset(t, "web")
+	sized := testPreset(t, preset.TargetSizeID).WithTargetSize(5_000_000)
+	half, err := TargetVideoBitrate(5_000_000, 5*time.Second, 128_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		Want        error
+		Preset      preset.Preset
+		Streams     Streams
+		Range       Range
+		WantRuns    [][]string
+		WantMissing []string
+	}{{ // Test 0: A middle span reads only that span of the input.
+		Preset: web, Range: Range{Start: 2500 * time.Millisecond, End: 7 * time.Second},
+		WantRuns: [][]string{{"-y", "-ss", "2.5", "-to", "7", "-i", "in.mov"}},
+	}, { // Test 1: Start only.
+		Preset: web, Range: Range{Start: 3 * time.Second},
+		WantRuns: [][]string{{"-y", "-ss", "3", "-i", "in.mov"}}, WantMissing: []string{"-to"},
+	}, { // Test 2: The whole input adds nothing.
+		Preset: web, WantMissing: []string{"-ss", "-to"},
+	}, { // Test 3: External audio is read over the same span.
+		Preset: web, Range: Range{Start: time.Second, End: 4 * time.Second},
+		Streams:  Streams{ExternalAudio: []string{"dub.wav"}},
+		WantRuns: [][]string{{"-ss", "1", "-to", "4", "-i", "in.mov", "-ss", "1", "-to", "4", "-i", "dub.wav"}},
+	}, { // Test 4: Burned text subtitles follow the seek.
+		Preset: web, Range: Range{Start: 10 * time.Second},
+		Streams: Streams{Subtitles: Subtitles{Mode: SubtitlesBurn, External: "en.srt"}},
+		WantRuns: [][]string{{"-vf", "scale=1920:1080,setpts=PTS+10/TB,subtitles=filename=en.srt," +
+			"setpts=PTS-STARTPTS"}},
+	}, { // Test 5: Burned subtitles from the start need no shift.
+		Preset: web, Streams: Streams{Subtitles: Subtitles{Mode: SubtitlesBurn, External: "en.srt"}},
+		WantRuns: [][]string{{"-vf", "scale=1920:1080,subtitles=filename=en.srt"}}, WantMissing: []string{"setpts"},
+	}, { // Test 6: A target size is budgeted over the span, on both passes.
+		Preset: sized, Range: Range{Start: 5 * time.Second},
+		WantRuns: [][]string{{"-ss", "5", "-i", "in.mov"}, {"-b:v", strconv.Itoa(half)}},
+	}, { // Test 7: Backward span.
+		Preset: web, Range: Range{Start: 4 * time.Second, End: 2 * time.Second}, Want: ErrRange,
+	}, { // Test 8: Negative start.
+		Preset: web, Range: Range{Start: -time.Second}, Want: ErrRange,
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			job := Job{Input: "in.mov", Preset: test.Preset, Streams: test.Streams, Range: test.Range}
+			extra := []probe.Info{{Streams: []probe.Stream{{Index: 0, Kind: "audio", Codec: "pcm_s16le",
+				Channels: 2, SampleRate: 48000}}}}
+			plan, err := Build(job, testInfo(), streamsAvail(), "out.mp4", "pass", extra...)
+			if !errors.Is(err, test.Want) {
+				t.Fatalf("error = %v, want %v", err, test.Want)
+			}
+			for _, run := range test.WantRuns {
+				if !containsRun(plan.Passes, run) {
+					t.Errorf("passes %q lack %q", plan.Passes, run)
+				}
+			}
+			for _, pass := range plan.Passes {
+				for _, arg := range pass {
+					for _, missing := range test.WantMissing {
+						if strings.Contains(arg, missing) {
+							t.Errorf("pass %q has %q", pass, missing)
+						}
+					}
+				}
+			}
+			if test.Range.Start > 0 && len(plan.Passes) == 2 && !slices.Contains(plan.Passes[0], "-ss") {
+				t.Errorf("first pass %q is not ranged", plan.Passes[0])
+			}
+		})
+	}
+}
+
+func TestRangeSpan(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		In       Range
+		Total    time.Duration
+		WantSpan time.Duration
+	}{
+		{Total: 10 * time.Second, WantSpan: 10 * time.Second},                                   // Test 0: Whole.
+		{In: Range{Start: 2 * time.Second}, Total: 10 * time.Second, WantSpan: 8 * time.Second}, // Test 1: Start only.
+		{In: Range{Start: 2 * time.Second, End: 5 * time.Second}, WantSpan: 3 * time.Second},    // Test 2: Unknown total.
+		{In: Range{End: 30 * time.Second}, Total: 10 * time.Second, WantSpan: 10 * time.Second}, // Test 3: End past total.
+		{In: Range{Start: 20 * time.Second}, Total: 10 * time.Second, WantSpan: 0},              // Test 4: Start past total.
+		{In: Range{Start: 2 * time.Second}, WantSpan: 0},                                        // Test 5: Nothing known.
+	}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			if got := test.In.Span(test.Total); got != test.WantSpan {
+				t.Errorf("span = %s, want %s", got, test.WantSpan)
 			}
 		})
 	}

@@ -3,6 +3,8 @@ package engine
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/dcadolph/icelos/internal/preset"
@@ -23,6 +25,58 @@ type Job struct {
 	Overwrite bool `json:"overwrite"`
 	// Streams chooses the tracks, subtitles, chapters, and metadata the output carries.
 	Streams Streams `json:"streams,omitzero"`
+	// Range limits the output to part of the input, zero for the whole input.
+	Range Range `json:"range,omitzero"`
+	// SplitChapters asks the queue to add one job per chapter of the input instead of this one.
+	// The engine never reads it.
+	SplitChapters bool `json:"splitChapters,omitempty"`
+}
+
+// Range is a span of the input's timeline.
+type Range struct {
+	// Start is where the output begins, zero for the start of the input.
+	Start time.Duration `json:"startNs,omitempty"`
+	// End is where the output ends, zero for the end of the input.
+	End time.Duration `json:"endNs,omitempty"`
+}
+
+// Validate reports whether r is a forward span.
+func (r Range) Validate() error {
+	switch {
+	case r.Start < 0:
+		return fmt.Errorf("%w: start %s before the input", ErrRange, r.Start)
+	case r.End != 0 && r.End <= r.Start:
+		return fmt.Errorf("%w: end %s not after start %s", ErrRange, r.End, r.Start)
+	}
+	return nil
+}
+
+// Span returns how long the output plays when the whole input plays for total, or zero when
+// that is unknown.
+func (r Range) Span(total time.Duration) time.Duration {
+	end := r.End
+	if end == 0 || (total > 0 && end > total) {
+		end = total
+	}
+	return max(0, end-r.Start)
+}
+
+// args returns the input options that read only r from the next input: -ss for the start and
+// -to for the end, both on the input's own timeline.
+func (r Range) args() []string {
+	var args []string
+	if r.Start > 0 {
+		args = append(args, "-ss", seconds(r.Start))
+	}
+	if r.End > 0 {
+		args = append(args, "-to", seconds(r.End))
+	}
+	return args
+}
+
+// seconds formats d as decimal seconds for ffmpeg time options.
+func seconds(d time.Duration) string {
+	return strconv.FormatFloat(d.Seconds(), 'f', -1, 64)
 }
 
 // Progress is one status report during an encode.

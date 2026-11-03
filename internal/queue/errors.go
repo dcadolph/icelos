@@ -9,4 +9,6 @@ var (
 	ErrUnknownJob = errors.New("unknown job")
 	// ErrDuplicateOutput is returned when two unfinished jobs would write the same file.
 	ErrDuplicateOutput = errors.New("output already claimed")
+	// ErrSplit is returned when a job cannot be split by chapters.
+	ErrSplit = errors.New("cannot split by chapters")
 )

@@ -86,6 +86,10 @@ func testSessionWith(t *testing.T, store *preset.Store) (*io.PipeWriter, *testOu
 		if strings.HasSuffix(path, ".m4a") {
 			info.Streams = info.Streams[1:]
 		}
+		if strings.Contains(path, "chapters") {
+			info.Chapters = []probe.Chapter{{End: time.Second / 2, Title: "One"},
+				{Start: time.Second / 2, End: time.Second, Title: "Two"}}
+		}
 		return info, nil
 	})
 	encoders := func(context.Context) (engine.EncoderSet, error) {
@@ -258,7 +262,8 @@ func TestPlan(t *testing.T) { //nolint:funlen // Test function.
 	t.Parallel()
 	dir := t.TempDir()
 	clip, voice := filepath.Join(dir, "clip.mov"), filepath.Join(dir, "voice.m4a")
-	for _, p := range []string{clip, voice} {
+	chaptered := filepath.Join(dir, "chapters.mov")
+	for _, p := range []string{clip, voice, chaptered} {
 		if err := os.WriteFile(p, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -278,6 +283,8 @@ func TestPlan(t *testing.T) { //nolint:funlen // Test function.
 		`{"id":"p6","op":"plan","input":"`+voice+`","preset":"web"}`,
 		`{"id":"a0","op":"add","input":"`+clip+`","preset":"web","streams":{"threads":3,"dropChapters":true}}`,
 		`{"id":"a1","op":"add","input":"`+clip+`","preset":"web","streams":{"subtitles":{"mode":"wild"}}}`,
+		`{"id":"s0","op":"add","input":"`+chaptered+`","preset":"web","splitChapters":true}`,
+		`{"id":"s1","op":"add","input":"`+clip+`","preset":"remux","splitChapters":true}`,
 		`{"id":"l","op":"list"}`,
 	)
 	verdict := func(v *engine.Verdict) string {
@@ -348,8 +355,21 @@ func TestPlan(t *testing.T) { //nolint:funlen // Test function.
 	if a := waitFor(t, out, byReply("a1")); a.Type != TypeError || !strings.Contains(a.Error, "subtitle mode") {
 		t.Errorf("add with bad streams = %q %q", a.Type, a.Error)
 	}
-	if l := waitFor(t, out, byReply("l")); len(l.Jobs) != 1 {
-		t.Errorf("list = %d jobs, want 1: plan must not queue", len(l.Jobs))
+	s0 := waitFor(t, out, byReply("s0"))
+	var names []string
+	for _, st := range s0.Jobs {
+		names = append(names, filepath.Base(st.Job.Output))
+	}
+	if s0.Status == nil || s0.Status.ID != "2" ||
+		!cmp.Equal(names, []string{"chapters - 01 One.mp4", "chapters - 02 Two.mp4"}) {
+		t.Errorf("split add = %+v, names %q", s0.Status, names)
+	}
+	if s1 := waitFor(t, out, byReply("s1")); s1.Status == nil || len(s1.Jobs) != 0 ||
+		s1.Status.Job.Range != (engine.Range{}) {
+		t.Errorf("split add without chapters = %+v, %d jobs", s1.Status, len(s1.Jobs))
+	}
+	if l := waitFor(t, out, byReply("l")); len(l.Jobs) != 4 {
+		t.Errorf("list = %d jobs, want 4: plan must not queue", len(l.Jobs))
 	}
 	if err := in.Close(); err != nil {
 		t.Fatal(err)

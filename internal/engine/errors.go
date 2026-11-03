@@ -29,4 +29,6 @@ var (
 	ErrNoSubtitle = errors.New("input has no such subtitle")
 	// ErrMissingFilter is returned when ffmpeg lacks a filter the job needs.
 	ErrMissingFilter = errors.New("filter not available")
+	// ErrRange is returned when a job's time range is not a forward span.
+	ErrRange = errors.New("time range invalid")
 )

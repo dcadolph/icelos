@@ -414,11 +414,12 @@ func perStream(args []string, kind string, n int) []string {
 	return out
 }
 
-// inputArgs returns the -i arguments for the extra input files.
-func inputArgs(paths []string) []string {
+// inputArgs returns the -i arguments for the extra input files, each read over the same range
+// options as the source so the tracks stay in step.
+func inputArgs(paths, ranged []string) []string {
 	var args []string
 	for _, p := range paths {
-		args = append(args, "-i", p)
+		args = append(slices.Concat(args, ranged), "-i", p)
 	}
 	return args
 }

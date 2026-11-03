@@ -8,9 +8,11 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/dcadolph/icelos/internal/engine"
+	"github.com/dcadolph/icelos/internal/probe"
 )
 
 // State is where a job is in its life.
@@ -67,6 +69,8 @@ type item struct {
 type Queue struct {
 	// enc runs each job.
 	enc engine.Encoder
+	// prober reads the chapters of jobs split by chapters.
+	prober engine.Prober
 	// workers is how many jobs run at once.
 	workers int
 	// notify receives every status change.
@@ -83,16 +87,19 @@ type Queue struct {
 	changed chan struct{}
 }
 
-// New returns a Queue that runs one job at a time through enc.
-func New(enc engine.Encoder, notify NotifyFunc) *Queue {
-	return WithWorkers(enc, 1, notify)
+// New returns a Queue that runs one job at a time through enc and reads chapters through prober.
+func New(enc engine.Encoder, prober engine.Prober, notify NotifyFunc) *Queue {
+	return WithWorkers(enc, prober, 1, notify)
 }
 
-// WithWorkers returns a Queue that runs up to workers jobs at once through enc. A nil notify
-// discards status changes.
-func WithWorkers(enc engine.Encoder, workers int, notify NotifyFunc) *Queue {
+// WithWorkers returns a Queue that runs up to workers jobs at once through enc and reads the
+// chapters of split jobs through prober. A nil notify discards status changes.
+func WithWorkers(enc engine.Encoder, prober engine.Prober, workers int, notify NotifyFunc) *Queue {
 	if enc == nil {
 		panic("queue.WithWorkers: Encoder required")
+	}
+	if prober == nil {
+		panic("queue.WithWorkers: Prober required")
 	}
 	if workers < 1 {
 		panic("queue.WithWorkers: workers must be at least 1")
@@ -100,51 +107,114 @@ func WithWorkers(enc engine.Encoder, workers int, notify NotifyFunc) *Queue {
 	if notify == nil {
 		notify = func(Status) {}
 	}
-	return &Queue{enc: enc, workers: workers, notify: notify, reserved: map[string]bool{},
-		changed: make(chan struct{})}
+	return &Queue{enc: enc, prober: prober, workers: workers, notify: notify,
+		reserved: map[string]bool{}, changed: make(chan struct{})}
 }
 
-// Add queues job. When job.Output is empty the queue picks a free name in outDir, or next to
-// the input when outDir is empty, and no two unfinished jobs ever share an output path.
-func (q *Queue) Add(job engine.Job, outDir string) (Status, error) {
+// Add queues job and returns the status of every job it became. When job.Output is empty the
+// queue picks a free name in outDir, or next to the input when outDir is empty, and no two
+// unfinished jobs ever share an output path. With job.SplitChapters set, the input is probed
+// under ctx and each chapter becomes its own job, named after the output with the chapter
+// number and title appended, e.g. "clip - 01 Intro.mp4". An input without chapters becomes one
+// job as if the flag were off.
+func (q *Queue) Add(ctx context.Context, job engine.Job, outDir string) ([]Status, error) {
 	if err := job.Preset.Validate(); err != nil {
-		return Status{}, err
+		return nil, err
 	}
 	fi, err := os.Stat(job.Input)
 	if err != nil {
-		return Status{}, fmt.Errorf("%w: %w", ErrInput, err)
+		return nil, fmt.Errorf("%w: %w", ErrInput, err)
 	}
 	if !fi.Mode().IsRegular() {
-		return Status{}, fmt.Errorf("%w: %s: not a regular file", ErrInput, job.Input)
+		return nil, fmt.Errorf("%w: %s: not a regular file", ErrInput, job.Input)
 	}
 	if job.Input, err = filepath.Abs(job.Input); err != nil {
-		return Status{}, fmt.Errorf("%w: %w", ErrInput, err)
+		return nil, fmt.Errorf("%w: %w", ErrInput, err)
+	}
+	var chapters []probe.Chapter
+	if job.SplitChapters {
+		if job.Range != (engine.Range{}) {
+			return nil, fmt.Errorf("%w: %s: the job already has a time range", ErrSplit, job.Input)
+		}
+		info, err := q.prober.Probe(ctx, job.Input)
+		if err != nil {
+			return nil, err
+		}
+		chapters = info.Chapters
+		job.SplitChapters = false
 	}
 
 	q.mu.Lock()
-	if job.Output == "" {
-		job.Output, err = engine.OutputPath(job.Input, job.Preset.Ext(), outDir,
-			func(p string) bool { return q.reserved[p] })
-	} else {
-		job.Output, err = filepath.Abs(job.Output)
-		if err == nil && q.reserved[job.Output] {
-			err = fmt.Errorf("%w: %s", ErrDuplicateOutput, job.Output)
-		}
-	}
+	jobs, err := q.expand(job, chapters, outDir)
 	if err != nil {
 		q.mu.Unlock()
-		return Status{}, err
+		return nil, err
 	}
-	q.next++
-	it := &item{status: Status{ID: strconv.Itoa(q.next), Job: job, State: StateQueued}}
-	q.items = append(q.items, it)
-	q.reserved[job.Output] = true
-	st := it.status
+	out := make([]Status, len(jobs))
+	for i, j := range jobs {
+		q.next++
+		it := &item{status: Status{ID: strconv.Itoa(q.next), Job: j, State: StateQueued}}
+		q.items = append(q.items, it)
+		q.reserved[j.Output] = true
+		out[i] = it.status
+	}
 	q.signal()
 	q.mu.Unlock()
 
-	q.notify(st)
-	return st, nil
+	for _, st := range out {
+		q.notify(st)
+	}
+	return out, nil
+}
+
+// expand returns the jobs that job becomes, one per chapter or job alone when chapters is
+// empty, each with its output path resolved and unclaimed. The caller holds mu.
+func (q *Queue) expand(job engine.Job, chapters []probe.Chapter, outDir string) ([]engine.Job, error) {
+	if len(chapters) == 0 {
+		chapters = []probe.Chapter{{}}
+	}
+	jobs := make([]engine.Job, 0, len(chapters))
+	claimed := map[string]bool{}
+	taken := func(p string) bool { return q.reserved[p] || claimed[p] }
+	for i, c := range chapters {
+		j := job
+		suffix := ""
+		if len(chapters) > 1 || c != (probe.Chapter{}) {
+			j.Range = engine.Range{Start: c.Start, End: c.End}
+			suffix = chapterSuffix(i, len(chapters), c.Title)
+		}
+		var err error
+		if job.Output == "" {
+			j.Output, err = engine.OutputPathNamed(job.Input, suffix, job.Preset.Ext(), outDir, taken)
+		} else {
+			j.Output, err = filepath.Abs(job.Output)
+			if err == nil && suffix != "" {
+				ext := filepath.Ext(j.Output)
+				j.Output = strings.TrimSuffix(j.Output, ext) + suffix + ext
+			}
+			if err == nil && taken(j.Output) {
+				err = fmt.Errorf("%w: %s", ErrDuplicateOutput, j.Output)
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		claimed[j.Output] = true
+		jobs = append(jobs, j)
+	}
+	return jobs, nil
+}
+
+// chapterSuffix returns the name suffix for chapter i of n, numbered from 1 with at least two
+// digits, followed by the title with path separators and colons replaced, e.g. " - 01 Intro".
+func chapterSuffix(i, n int, title string) string {
+	width := max(2, len(strconv.Itoa(n)))
+	s := fmt.Sprintf(" - %0*d", width, i+1)
+	title = strings.Join(strings.Fields(strings.NewReplacer("/", "-", ":", "-", "\\", "-").Replace(title)), " ")
+	if title != "" {
+		s += " " + title
+	}
+	return s
 }
 
 // Cancel stops the job with id. A queued job is marked canceled at once. A running job is

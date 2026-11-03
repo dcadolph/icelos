@@ -16,6 +16,12 @@ const maxNameTries = 999
 // Finder-style number, e.g. "clip 2.mp4", and the input itself is never chosen. A nil taken
 // checks the disk only.
 func OutputPath(input, ext, dir string, taken func(string) bool) (string, error) {
+	return OutputPathNamed(input, "", ext, dir, taken)
+}
+
+// OutputPathNamed is OutputPath for a file named after input with suffix appended to its base
+// name, e.g. " - 01 Intro".
+func OutputPathNamed(input, suffix, ext, dir string, taken func(string) bool) (string, error) {
 	in, err := filepath.Abs(input)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrOutput, err)
@@ -23,7 +29,7 @@ func OutputPath(input, ext, dir string, taken func(string) bool) (string, error)
 	if dir == "" {
 		dir = filepath.Dir(in)
 	}
-	base := strings.TrimSuffix(filepath.Base(in), filepath.Ext(in))
+	base := strings.TrimSuffix(filepath.Base(in), filepath.Ext(in)) + suffix
 	for n := 1; n <= maxNameTries; n++ {
 		name := base
 		if n > 1 {

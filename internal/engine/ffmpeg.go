@@ -169,13 +169,14 @@ func (f *FFmpeg) Encode(ctx context.Context, job Job, report ReportFunc) error {
 	if err := f.checkFilters(ctx, plan.Filters); err != nil {
 		return err
 	}
-	err = f.run(ctx, plan, info.Duration, report)
+	span := job.Range.Span(info.Duration)
+	err = f.run(ctx, plan, span, report)
 	if err != nil && plan.Hardware && ctx.Err() == nil {
 		job.Hardware = false
 		if plan, err = Build(job, info, avail, partial, filepath.Join(work, "pass"), extra...); err != nil {
 			return err
 		}
-		err = f.run(ctx, plan, info.Duration, report)
+		err = f.run(ctx, plan, span, report)
 	}
 	if err != nil {
 		return err

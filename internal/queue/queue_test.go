@@ -15,6 +15,7 @@ import (
 
 	"github.com/dcadolph/icelos/internal/engine"
 	"github.com/dcadolph/icelos/internal/preset"
+	"github.com/dcadolph/icelos/internal/probe"
 )
 
 // errTestEncode is what the test encoder returns for inputs named fail.
@@ -87,6 +88,27 @@ func testJob(t *testing.T, input string) engine.Job {
 	return engine.Job{Input: input, Preset: p}
 }
 
+// testProber returns a prober that reports chapters for every input, and fails for inputs named
+// noprobe.
+func testProber(chapters []probe.Chapter) engine.Prober {
+	return engine.ProberFunc(func(_ context.Context, path string) (probe.Info, error) {
+		if strings.HasPrefix(filepath.Base(path), "noprobe") {
+			return probe.Info{}, probe.ErrProbe
+		}
+		return probe.Info{Duration: time.Minute, Chapters: chapters}, nil
+	})
+}
+
+// addOne adds job to q and returns the status of the first job it became.
+func addOne(t *testing.T, q *Queue, job engine.Job, outDir string) (Status, error) {
+	t.Helper()
+	group, err := q.Add(t.Context(), job, outDir)
+	if err != nil {
+		return Status{}, err
+	}
+	return group[0], nil
+}
+
 // waitState polls q until job id reaches want or the test times out.
 func waitState(t *testing.T, q *Queue, id string, want State) {
 	t.Helper()
@@ -105,10 +127,10 @@ func waitState(t *testing.T, q *Queue, id string, want State) {
 func TestAddResolvesOutputs(t *testing.T) {
 	t.Parallel()
 	paths := testFiles(t, "clip.mov", "clip.mp4")
-	q := New(newTestEncoder(), nil)
+	q := New(newTestEncoder(), testProber(nil), nil)
 	var got []string
 	for range 2 {
-		st, err := q.Add(testJob(t, paths[0]), "")
+		st, err := addOne(t, q, testJob(t, paths[0]), "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,11 +164,11 @@ func TestAddErrors(t *testing.T) {
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
 			t.Parallel()
-			q := New(newTestEncoder(), nil)
-			if _, err := q.Add(testJob(t, paths[0]), ""); err != nil {
+			q := New(newTestEncoder(), testProber(nil), nil)
+			if _, err := addOne(t, q, testJob(t, paths[0]), ""); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := q.Add(test.Job(testJob(t, paths[0])), ""); !errors.Is(err, test.Want) {
+			if _, err := addOne(t, q, test.Job(testJob(t, paths[0])), ""); !errors.Is(err, test.Want) {
 				t.Errorf("error = %v, want %v", err, test.Want)
 			}
 		})
@@ -158,7 +180,7 @@ func TestDrain(t *testing.T) {
 	paths := testFiles(t, "ok.mov", "fail.mov", "ok2.mov")
 	var mu sync.Mutex
 	var events []State
-	q := New(newTestEncoder(), func(st Status) {
+	q := New(newTestEncoder(), testProber(nil), func(st Status) {
 		mu.Lock()
 		defer mu.Unlock()
 		if st.ID == "2" {
@@ -166,7 +188,7 @@ func TestDrain(t *testing.T) {
 		}
 	})
 	for _, p := range paths {
-		if _, err := q.Add(testJob(t, p), ""); err != nil {
+		if _, err := addOne(t, q, testJob(t, p), ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -193,12 +215,12 @@ func TestCancel(t *testing.T) {
 	t.Parallel()
 	paths := testFiles(t, "block.mov", "later.mov")
 	enc := newTestEncoder()
-	q := New(enc, nil)
-	first, err := q.Add(testJob(t, paths[0]), "")
+	q := New(enc, testProber(nil), nil)
+	first, err := addOne(t, q, testJob(t, paths[0]), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := q.Add(testJob(t, paths[1]), "")
+	second, err := addOne(t, q, testJob(t, paths[1]), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +254,7 @@ func TestCancel(t *testing.T) {
 	if n := len(q.List()); n != 0 {
 		t.Errorf("after Clear, %d jobs remain", n)
 	}
-	if _, err := q.Add(engine.Job{Input: paths[0], Output: first.Job.Output, Preset: first.Job.Preset}, ""); err != nil {
+	if _, err := addOne(t, q, engine.Job{Input: paths[0], Output: first.Job.Output, Preset: first.Job.Preset}, ""); err != nil {
 		t.Errorf("finished job still holds its output: %v", err)
 	}
 }
@@ -240,19 +262,19 @@ func TestCancel(t *testing.T) {
 func TestServeWakesAndStops(t *testing.T) {
 	t.Parallel()
 	paths := testFiles(t, "a.mov", "block.mov")
-	q := New(newTestEncoder(), nil)
+	q := New(newTestEncoder(), testProber(nil), nil)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		q.Serve(ctx)
 		close(done)
 	}()
-	st, err := q.Add(testJob(t, paths[0]), "")
+	st, err := addOne(t, q, testJob(t, paths[0]), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	waitState(t, q, st.ID, StateDone)
-	blocked, err := q.Add(testJob(t, paths[1]), "")
+	blocked, err := addOne(t, q, testJob(t, paths[1]), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,10 +288,10 @@ func TestWorkersRunInParallel(t *testing.T) {
 	t.Parallel()
 	paths := testFiles(t, "block.mov", "block.mkv", "block.avi")
 	enc := newTestEncoder()
-	q := WithWorkers(enc, 2, nil)
+	q := WithWorkers(enc, testProber(nil), 2, nil)
 	var ids []string
 	for _, p := range paths {
-		st, err := q.Add(testJob(t, p), "")
+		st, err := addOne(t, q, testJob(t, p), "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -300,11 +322,14 @@ func TestWithWorkersPanics(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		Enc     engine.Encoder
+		Prober  engine.Prober
 		Workers int
 	}{{ // Test 0: Nil encoder.
-		Enc: nil, Workers: 1,
+		Enc: nil, Prober: testProber(nil), Workers: 1,
 	}, { // Test 1: Zero workers.
-		Enc: newTestEncoder(), Workers: 0,
+		Enc: newTestEncoder(), Prober: testProber(nil), Workers: 0,
+	}, { // Test 2: Nil prober.
+		Enc: newTestEncoder(), Workers: 1,
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
@@ -314,7 +339,7 @@ func TestWithWorkersPanics(t *testing.T) {
 					t.Error("expected panic")
 				}
 			}()
-			WithWorkers(test.Enc, test.Workers, nil)
+			WithWorkers(test.Enc, test.Prober, test.Workers, nil)
 		})
 	}
 }
@@ -327,5 +352,114 @@ func TestStateFinished(t *testing.T) {
 		if got := state.Finished(); got != want {
 			t.Errorf("%s.Finished() = %v, want %v", state, got, want)
 		}
+	}
+}
+
+func TestAddSplitChapters(t *testing.T) { //nolint:funlen // Test function.
+	t.Parallel()
+	three := []probe.Chapter{
+		{Start: 0, End: 10 * time.Second, Title: "Intro"},
+		{Start: 10 * time.Second, End: 25 * time.Second, Title: " Act 1/2: Rise "},
+		{Start: 25 * time.Second, End: time.Minute},
+	}
+	tests := []struct {
+		Want       error
+		Chapters   []probe.Chapter
+		Input      string
+		Output     string
+		Range      engine.Range
+		Existing   []string
+		Claimed    string
+		WantNames  []string
+		WantRanges []engine.Range
+		WantJobs   int
+	}{{ // Test 0: One job per chapter, numbered and titled.
+		Chapters: three, Input: "clip.mov",
+		WantNames:  []string{"clip - 01 Intro.mp4", "clip - 02 Act 1-2- Rise.mp4", "clip - 03.mp4"},
+		WantRanges: []engine.Range{{End: 10 * time.Second}, {Start: 10 * time.Second, End: 25 * time.Second}, {Start: 25 * time.Second, End: time.Minute}},
+		WantJobs:   3,
+	}, { // Test 1: No chapters is one plain job.
+		Input: "clip.mov", WantNames: []string{"clip.mp4"}, WantRanges: []engine.Range{{}}, WantJobs: 1,
+	}, { // Test 2: An explicit output gets the suffix before its extension.
+		Chapters: three[:2], Input: "clip.mov", Output: "out.mp4",
+		WantNames:  []string{"out - 01 Intro.mp4", "out - 02 Act 1-2- Rise.mp4"},
+		WantRanges: []engine.Range{{End: 10 * time.Second}, {Start: 10 * time.Second, End: 25 * time.Second}},
+		WantJobs:   2,
+	}, { // Test 3: A taken chapter name gets a Finder-style number.
+		Chapters: three[:1], Input: "clip.mov", Existing: []string{"clip - 01 Intro.mp4"},
+		WantNames: []string{"clip - 01 Intro 2.mp4"}, WantRanges: []engine.Range{{End: 10 * time.Second}},
+		WantJobs: 1,
+	}, { // Test 4: A job with a range cannot also split.
+		Chapters: three, Input: "clip.mov", Range: engine.Range{Start: time.Second}, Want: ErrSplit,
+	}, { // Test 5: A probe failure stops the add.
+		Input: "noprobe.mov", Want: probe.ErrProbe,
+	}, { // Test 6: One claimed name adds none of the chapters.
+		Chapters: three, Input: "clip.mov", Output: "out.mp4", Claimed: "out - 02 Act 1-2- Rise.mp4",
+		Want: ErrDuplicateOutput, WantJobs: 1,
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			paths := testFiles(t, append([]string{test.Input}, test.Existing...)...)
+			dir := filepath.Dir(paths[0])
+			q := New(newTestEncoder(), testProber(test.Chapters), nil)
+			if test.Claimed != "" {
+				job := testJob(t, paths[0])
+				job.Output = filepath.Join(dir, test.Claimed)
+				if _, err := addOne(t, q, job, ""); err != nil {
+					t.Fatal(err)
+				}
+			}
+			job := testJob(t, paths[0])
+			job.SplitChapters, job.Range = true, test.Range
+			if test.Output != "" {
+				job.Output = filepath.Join(dir, test.Output)
+			}
+			group, err := q.Add(t.Context(), job, "")
+			if !errors.Is(err, test.Want) {
+				t.Fatalf("error = %v, want %v", err, test.Want)
+			}
+			var names []string
+			var ranges []engine.Range
+			for _, st := range group {
+				names = append(names, filepath.Base(st.Job.Output))
+				ranges = append(ranges, st.Job.Range)
+				if st.Job.SplitChapters {
+					t.Errorf("job %s still asks to split", st.ID)
+				}
+			}
+			if diff := cmp.Diff(test.WantNames, names); diff != "" {
+				t.Errorf("names mismatch (-want +got):\n%s", diff)
+			}
+			if diff := cmp.Diff(test.WantRanges, ranges); diff != "" {
+				t.Errorf("ranges mismatch (-want +got):\n%s", diff)
+			}
+			if n := len(q.List()); n != test.WantJobs {
+				t.Errorf("queue holds %d jobs, want %d", n, test.WantJobs)
+			}
+		})
+	}
+}
+
+func TestChapterSuffix(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		Title      string
+		WantSuffix string
+		Index      int
+		Count      int
+	}{
+		{Index: 0, Count: 3, Title: "Intro", WantSuffix: " - 01 Intro"}, // Test 0: Two digits.
+		{Index: 9, Count: 12, WantSuffix: " - 10"},                      // Test 1: Untitled.
+		{Index: 4, Count: 120, Title: "a\\b", WantSuffix: " - 005 a-b"}, // Test 2: Three digits, backslash.
+		{Index: 0, Count: 1, Title: "  \t ", WantSuffix: " - 01"},       // Test 3: Blank title.
+	}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			if got := chapterSuffix(test.Index, test.Count, test.Title); got != test.WantSuffix {
+				t.Errorf("suffix = %q, want %q", got, test.WantSuffix)
+			}
+		})
 	}
 }
