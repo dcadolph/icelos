@@ -155,7 +155,7 @@ struct BottomBar: View {
             .buttonStyle(.borderedProminent)
             .tint(Theme.accent)
             .disabled(model.pendingCount == 0 || model.settings == nil)
-            .keyboardShortcut(.return, modifiers: .command)
+            .keyboardShortcut(AppCommand.convert.shortcut)
         }
         .controlSize(.large)
         .padding(.horizontal, 20)
@@ -203,6 +203,8 @@ struct DropZone: View {
     let targeted: Bool
     /// choose opens the file picker.
     let choose: () -> Void
+    /// reduceMotion turns off the hover animation.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 12) {
@@ -226,6 +228,6 @@ struct DropZone: View {
                 .foregroundStyle(targeted ? Theme.accent : Theme.border)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Theme.accent.opacity(targeted ? 0.08 : 0)))
         }
-        .animation(.easeOut(duration: 0.2), value: targeted)
+        .animation(Motion.animation(.easeOut(duration: 0.2), reduceMotion: reduceMotion), value: targeted)
     }
 }

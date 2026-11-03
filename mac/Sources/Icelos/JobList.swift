@@ -93,7 +93,7 @@ struct JobRow: View {
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(selected ? [.isSelected] : [])
         .contextMenu { menu }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: item.phase)
+        .animation(Motion.animation(.easeOut(duration: 0.2), reduceMotion: reduceMotion), value: item.phase)
     }
 
     /// target is the line under the source: chips and estimate before converting, the bar and

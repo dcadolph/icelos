@@ -28,29 +28,29 @@ struct IcelosApp: App {
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Add Files…") { MediaFiles.choose { session.model.add(urls: $0) } }
-                    .keyboardShortcut("o")
+                    .keyboardShortcut(AppCommand.addFiles.shortcut)
             }
             CommandGroup(replacing: .textEditing) {
                 Button("Search Formats") { session.window.searching = true }
-                    .keyboardShortcut("f")
+                    .keyboardShortcut(AppCommand.searchFormats.shortcut)
             }
             SidebarCommands()
             CommandGroup(after: .sidebar) {
                 Button(session.window.showsInspector ? "Hide Inspector" : "Show Inspector") {
                     session.window.showsInspector.toggle()
                 }
-                .keyboardShortcut("i", modifiers: [.command, .option])
+                .keyboardShortcut(AppCommand.toggleInspector.shortcut)
             }
             CommandMenu("Convert") {
                 Button("Convert") { session.model.convertAll() }
-                    .keyboardShortcut(.return)
+                    .keyboardShortcut(AppCommand.convert.shortcut)
                     .disabled(session.model.pendingCount == 0)
                 Button("Clear Finished") { session.model.clearFinished() }
-                    .keyboardShortcut("k")
+                    .keyboardShortcut(AppCommand.clearFinished.shortcut)
                     .disabled(!session.model.hasFinished)
                 Divider()
                 Button("Remove from List") { session.model.removeSelection() }
-                    .keyboardShortcut(.delete)
+                    .keyboardShortcut(AppCommand.removeSelection.shortcut)
                     .disabled(!session.model.canRemoveSelection)
             }
         }

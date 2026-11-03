@@ -95,6 +95,8 @@ extension View {
 struct GradientBar: View {
     /// value is the fill from 0 to 1.
     var value: Double
+    /// reduceMotion turns off the fill animation.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { geo in
@@ -102,7 +104,7 @@ struct GradientBar: View {
                 Capsule().fill(Theme.text.opacity(0.08))
                 Capsule().fill(Theme.accent)
                     .frame(width: max(6, geo.size.width * min(1, max(0, value))))
-                    .animation(.easeOut(duration: 0.35), value: value)
+                    .animation(Motion.animation(.easeOut(duration: 0.35), reduceMotion: reduceMotion), value: value)
             }
         }
         .frame(height: 6)

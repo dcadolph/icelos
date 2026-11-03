@@ -144,12 +144,15 @@ struct SettingsForm: View {
     var body: some View {
         Form {
             formatSection
-            if container?.kind == "video" { videoSection }
+            if shown.contains(.videoEncoder) { videoSection }
             audioSection
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
     }
+
+    /// shown is the set of controls the catalog rules give the draft.
+    private var shown: Set<InspectorControl> { Set(catalog.inspectorControls(for: draft)) }
 
     /// container is the draft's catalog container.
     private var container: Container? { catalog.container(id: draft.container) }
@@ -174,7 +177,7 @@ struct SettingsForm: View {
                 }
             }
             .help("The file type to write. Changing it resets the encoders to ones this format carries.")
-            if draft.needsSize {
+            if shown.contains(.fitUnder) {
                 LabeledContent("Fit under") {
                     TextField("25MB", text: $targetSize)
                         .textFieldStyle(.roundedBorder)
@@ -213,13 +216,12 @@ struct SettingsForm: View {
                 }
                 .help("The video codec. Copy from source keeps the original stream with no quality loss.")
                 if let codec = videoCodec {
-                    if catalog.isFixed(codec, profile: draft.video.profile, in: container) {
+                    if shown.contains(.modes) {
                         modePicker(codec, container)
-                    } else {
+                    } else if shown.contains(.resolution) {
                         resolutionPicker
                     }
-                    if !catalog.modes(for: codec, profile: draft.video.profile, in: container)
-                        .contains(where: { $0.fps != nil }) {
+                    if shown.contains(.frameRate) {
                         Picker("Frame rate", selection: Binding(
                             get: { draft.video.fps ?? 0 },
                             set: { draft.video.fps = $0 == 0 ? nil : $0 })) {
@@ -261,7 +263,7 @@ struct SettingsForm: View {
             Text("Custom size").tag("custom")
         }
         .help("Each size is a box the video fits inside, never upscaled. Custom size sets an exact frame.")
-        if exact {
+        if shown.contains(.frameSize) {
             LabeledContent("Frame size") {
                 HStack(spacing: 6) {
                     dimensionField($draft.video.width)
@@ -324,15 +326,14 @@ struct SettingsForm: View {
     /// rateControls offers the codec's rate controls and the quality or bitrate each needs.
     @ViewBuilder private func rateControls(_ codec: Codec) -> some View {
         let controls = codec.rateControls ?? []
-        if !controls.isEmpty, let rc = draft.video.rateControl {
+        if shown.contains(.rateControl), let rc = draft.video.rateControl {
             Picker("Rate control", selection: Binding(
                 get: { rc },
                 set: { draft.video = catalog.withRateControl(draft.video, $0, keeping: draft.video) })) {
                 ForEach(controls, id: \.self) { Text(Self.rateControlName($0)).tag($0) }
             }
             .help("Constant quality lets the size vary. Bitrate modes aim for a data rate. Two-pass is slower and more exact.")
-            switch rc {
-            case RateControl.quality:
+            if shown.contains(.quality) {
                 Picker("Quality", selection: Binding(
                     get: { draft.video.quality ?? QualityLevel.high },
                     set: { draft.video.quality = $0 })) {
@@ -342,19 +343,19 @@ struct SettingsForm: View {
                 }
                 .pickerStyle(.segmented)
                 .help("High keeps nearly all detail. Small gives the smallest file.")
-            case RateControl.twopass where draft.needsSize:
-                note("Two passes aim for the size set under Fit under.")
-            default:
+            } else if shown.contains(.videoBitrate) {
                 LabeledContent("Bitrate") {
                     BitrateField(bitsPerSecond: $draft.video.bitrate, choices: catalog.domains.videoBitrates)
                 }
+            } else if rc == RateControl.twopass {
+                note("Two passes aim for the size set under Fit under.")
             }
         }
     }
 
     /// codecOptions offers the codec's profiles, levels, and tags.
     @ViewBuilder private func codecOptions(_ codec: Codec, _ container: Container) -> some View {
-        if let profiles = codec.profiles, !profiles.isEmpty {
+        if shown.contains(.profile), let profiles = codec.profiles {
             let required = (codec.modes ?? []).contains { $0.profile != nil }
             Picker("Profile", selection: Binding(
                 get: { draft.video.profile ?? "" },
@@ -374,7 +375,7 @@ struct SettingsForm: View {
             }
             .help("The codec profile. Older devices may need a simpler one.")
         }
-        if let levels = codec.levels, !levels.isEmpty {
+        if shown.contains(.level), let levels = codec.levels {
             Picker("Level", selection: Binding(
                 get: { draft.video.level ?? "" },
                 set: { draft.video.level = $0.isEmpty ? nil : $0 })) {
@@ -383,7 +384,7 @@ struct SettingsForm: View {
             }
             .help("Caps resolution and data rate for device compatibility. Automatic picks one that fits.")
         }
-        if let tags = codec.tags, !tags.isEmpty {
+        if shown.contains(.tag), let tags = codec.tags {
             Picker("Codec tag", selection: Binding(
                 get: { draft.video.tag ?? "" },
                 set: { draft.video.tag = $0.isEmpty ? nil : $0 })) {
@@ -398,7 +399,7 @@ struct SettingsForm: View {
     @ViewBuilder private var audioSection: some View {
         Section("Audio") {
             if let container {
-                if container.kind == "video" {
+                if shown.contains(.includeAudio) {
                     Toggle("Include audio", isOn: Binding(
                         get: { !draft.audio.codec.isEmpty },
                         set: { on in
@@ -407,7 +408,7 @@ struct SettingsForm: View {
                         }))
                         .help("Turn off to write a silent video.")
                 }
-                if !draft.audio.codec.isEmpty {
+                if shown.contains(.audioEncoder) {
                     Picker("Encoder", selection: Binding(
                         get: { draft.audio.codec },
                         set: { draft = catalog.settingAudioCodec(draft, to: $0) })) {
@@ -427,31 +428,33 @@ struct SettingsForm: View {
 
     /// audioOptions offers sample rate, channels, bitrate, and bit depth for the codec.
     @ViewBuilder private func audioOptions(_ codec: Codec, _ container: Container) -> some View {
-        let rates = catalog.sampleRates(for: codec, in: container)
-        Picker("Sample rate", selection: Binding(
-            get: { draft.audio.sampleRate ?? 0 },
-            set: { draft.audio.sampleRate = $0 == 0 ? nil : $0; clampAudioBitrate(codec) })) {
-            if container.sampleRates?.isEmpty != false { Text("Same as source").tag(0) }
-            ForEach(rates, id: \.self) { Text(Self.hertz($0)).tag($0) }
+        if shown.contains(.sampleRate) {
+            Picker("Sample rate", selection: Binding(
+                get: { draft.audio.sampleRate ?? 0 },
+                set: { draft.audio.sampleRate = $0 == 0 ? nil : $0; clampAudioBitrate(codec) })) {
+                if container.sampleRates?.isEmpty != false { Text("Same as source").tag(0) }
+                ForEach(catalog.sampleRates(for: codec, in: container), id: \.self) { Text(Self.hertz($0)).tag($0) }
+            }
+            .help("Samples per second. Use 48 kHz for video and 44.1 kHz for music.")
         }
-        .help("Samples per second. Use 48 kHz for video and 44.1 kHz for music.")
-        let layouts = catalog.channelLayouts(for: codec, in: container)
-        Picker("Channels", selection: Binding(
-            get: { draft.audio.channels ?? 0 },
-            set: { draft.audio.channels = $0 == 0 ? nil : $0; clampAudioBitrate(codec) })) {
-            if container.channels == nil { Text("Same as source").tag(0) }
-            ForEach(layouts, id: \.count) { Text($0.name).tag($0.count) }
+        if shown.contains(.channels) {
+            Picker("Channels", selection: Binding(
+                get: { draft.audio.channels ?? 0 },
+                set: { draft.audio.channels = $0 == 0 ? nil : $0; clampAudioBitrate(codec) })) {
+                if container.channels == nil { Text("Same as source").tag(0) }
+                ForEach(catalog.channelLayouts(for: codec, in: container), id: \.count) { Text($0.name).tag($0.count) }
+            }
+            .help("Mono, stereo, or surround. Same as source keeps the original layout.")
         }
-        .help("Mono, stereo, or surround. Same as source keeps the original layout.")
         let choices = catalog.audioBitrates(for: codec, sampleRate: draft.audio.sampleRate,
                                             channels: draft.audio.channels)
-        if let fixed = codec.bitrates, !fixed.isEmpty {
+        if shown.contains(.fixedAudioBitrate), let fixed = codec.bitrates {
             Picker("Bitrate", selection: Binding(
                 get: { draft.audio.bitrate ?? fixed.max() ?? 0 },
                 set: { draft.audio.bitrate = $0 })) {
                 ForEach(fixed, id: \.self) { Text(BitrateField.label($0)).tag($0) }
             }
-        } else if !choices.isEmpty {
+        } else if shown.contains(.audioBitrate) {
             LabeledContent("Bitrate") {
                 BitrateField(bitsPerSecond: $draft.audio.bitrate, choices: choices)
             }
@@ -461,7 +464,7 @@ struct SettingsForm: View {
                 note("\(codec.name) tops out at \(BitrateField.label(cap)) here.", color: Theme.danger)
             }
         }
-        if let depths = codec.bitDepths, depths.count > 1 {
+        if shown.contains(.bitDepth), let depths = codec.bitDepths {
             Picker("Bit depth", selection: Binding(
                 get: { draft.audio.bitDepth ?? 0 },
                 set: { draft.audio.bitDepth = $0 == 0 ? nil : $0 })) {
@@ -540,6 +543,7 @@ struct BitrateField: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Common bitrates")
+            .accessibilityLabel("Common bitrates")
         }
     }
 
