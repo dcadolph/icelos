@@ -1,10 +1,10 @@
 import Foundation
 
-/// Preset mirrors one built-in conversion target from the backend.
+/// Preset mirrors one built-in or custom conversion target from the backend.
 public struct Preset: Codable, Hashable, Identifiable, Sendable {
     /// Video holds the video half of a preset.
     public struct Video: Codable, Hashable, Sendable {
-        /// codec is "h264", "hevc", "copy", or empty for audio-only output.
+        /// codec is a catalog codec ID, "copy", or empty for audio-only output.
         public var codec: String
         /// maxWidth caps the long side in pixels.
         public var maxWidth: Int?
@@ -32,7 +32,7 @@ public struct Preset: Codable, Hashable, Identifiable, Sendable {
 
     /// Audio holds the audio half of a preset.
     public struct Audio: Codable, Hashable, Sendable {
-        /// codec is "aac", "mp3", "copy", or empty for silent output.
+        /// codec is a catalog codec ID, "copy", or empty for silent output.
         public var codec: String
         /// bitrate is in bits per second.
         public var bitrate: Int?
@@ -60,12 +60,17 @@ public struct Preset: Codable, Hashable, Identifiable, Sendable {
     public var audio: Audio
     /// targetBytes is the desired output size when set.
     public var targetBytes: Int64?
+    /// custom is true for presets the user saved.
+    public var custom: Bool?
 
     /// needsSize is true for the preset that asks the user for a size.
     public var needsSize: Bool { id == "target-size" }
 
     /// isAudioOnly is true when the preset drops video.
     public var isAudioOnly: Bool { video.codec.isEmpty }
+
+    /// isCustom is true for presets the user saved.
+    public var isCustom: Bool { custom == true }
 }
 
 /// JobProgress mirrors one backend progress report.
@@ -186,6 +191,8 @@ public struct Request: Codable, Sendable, Equatable {
     public var input: String?
     /// preset is the preset ID.
     public var preset: String?
+    /// presetBody is a whole preset, sent instead of preset for edited settings and saves.
+    public var presetBody: Preset?
     /// size is the target size, e.g. "25MB".
     public var size: String?
     /// hardware prefers VideoToolbox.
@@ -197,13 +204,14 @@ public struct Request: Codable, Sendable, Equatable {
 
     /// Creates a request.
     public init(id: String? = nil, op: String, path: String? = nil, input: String? = nil,
-                preset: String? = nil, size: String? = nil, hardware: Bool? = nil,
-                outDir: String? = nil, job: String? = nil) {
+                preset: String? = nil, presetBody: Preset? = nil, size: String? = nil,
+                hardware: Bool? = nil, outDir: String? = nil, job: String? = nil) {
         self.id = id
         self.op = op
         self.path = path
         self.input = input
         self.preset = preset
+        self.presetBody = presetBody
         self.size = size
         self.hardware = hardware
         self.outDir = outDir
@@ -223,8 +231,12 @@ public struct Message: Codable, Sendable {
     public var version: String?
     /// encoders lists usable ffmpeg encoders.
     public var encoders: [String]?
-    /// presets lists the built-in presets.
+    /// presets lists the built-in presets, then the custom ones.
     public var presets: [Preset]?
+    /// recent lists recently used preset IDs, newest first.
+    public var recent: [String]?
+    /// warning reports a problem that did not stop the request.
+    public var warning: String?
     /// catalog is the format catalog.
     public var catalog: Catalog?
     /// info is a probe result.

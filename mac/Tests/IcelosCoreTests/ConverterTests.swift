@@ -25,6 +25,12 @@ private final class Harness {
     var sent: [Request] = []
     /// model is the converter under test.
     lazy var model = Converter(send: { [unowned self] in self.sent.append($0) }, fileSize: { _ in 40 })
+
+    /// load feeds the model the captured presets and catalog replies.
+    func load() throws {
+        model.handle(try JSONDecoder().decode(Message.self, from: Data(catalogFixture.utf8)))
+        model.handle(try JSONDecoder().decode(Message.self, from: Data(presetsFixture.utf8)))
+    }
 }
 
 @MainActor
@@ -33,7 +39,7 @@ private final class Harness {
         let h = Harness()
         h.model.handle(try decode(#"{"type":"ready","version":"v1.0.0"}"#))
         #expect(h.model.version == "v1.0.0")
-        #expect(h.sent.map(\.op) == ["presets", "capabilities"])
+        #expect(h.sent.map(\.op) == ["presets", "capabilities", "catalog"])
         h.model.handle(try decode(presetsLine))
         #expect(h.model.presets.map(\.id) == ["apple", "target-size", "audio"])
         #expect(h.model.presets[2].isAudioOnly)
@@ -142,6 +148,184 @@ private final class Harness {
         #expect(h.model.items[0].phase == .failed)
         h.model.handle(try decode(#"{"type":"ready","version":"v2"}"#))
         #expect(h.model.fault == nil)
+    }
+
+    @Test func catalogReplyIsKept() throws {
+        let h = Harness()
+        try h.load()
+        #expect(h.model.catalog?.containers.isEmpty == false)
+        #expect(h.model.container?.id == "mp4")
+        #expect(h.model.settings?.id == "apple")
+        #expect(!h.model.isEdited)
+    }
+
+    @Test func changingContainerResetsCodecs() throws {
+        let h = Harness()
+        try h.load()
+        h.model.setContainer("webm")
+        var s = try #require(h.model.settings)
+        #expect(s.container == "webm")
+        #expect(s.ext == "webm")
+        #expect(s.video.codec == "vp9", "webm's first allowed codec")
+        #expect(s.audio.codec == "opus")
+        #expect(s.video.maxWidth == 3840, "the fit box carries over")
+        #expect(s.video.rateControl == "quality")
+        #expect(h.model.isEdited)
+
+        h.model.setContainer("mkv")
+        s = try #require(h.model.settings)
+        #expect(s.video.codec == "h264")
+        #expect(s.audio.codec == "aac")
+
+        h.model.settings?.audio = Preset.Audio(codec: "")
+        h.model.setContainer("mov")
+        #expect(h.model.settings?.audio.codec == "", "audio left off stays off in a video format")
+
+        h.model.setContainer("mp3")
+        s = try #require(h.model.settings)
+        #expect(s.isAudioOnly)
+        #expect(s.audio.codec == "mp3", "an audio format needs its audio back")
+        #expect(s.audio.bitrate == 192_000)
+    }
+
+    @Test func fixedFormatsTakeNoFitBox() throws {
+        let h = Harness()
+        try h.load()
+        let catalog = try #require(h.model.catalog)
+        let dv = try #require(catalog.container(id: "dv"))
+        let p1080 = try #require(catalog.domains.resolutions.first { $0.id == "1080p" })
+        h.model.select(container: dv, resolution: p1080)
+        let s = try #require(h.model.settings)
+        #expect(h.model.presetID == "")
+        #expect(s.video.codec == "dvvideo")
+        #expect(s.video.maxWidth == nil && s.video.width == nil)
+        #expect(s.video.rateControl == nil, "dvvideo has no rate control choice")
+        #expect(s.audio.codec == "pcm_s16le")
+        #expect(s.audio.sampleRate == 48000)
+        #expect(s.audio.channels == 2)
+        #expect(s.audio.bitrate == nil)
+    }
+
+    @Test func catalogSelectionSendsInlineSettings() throws {
+        let h = Harness()
+        try h.load()
+        let catalog = try #require(h.model.catalog)
+        let mp4 = try #require(catalog.container(id: "mp4"))
+        h.model.select(container: mp4)
+        #expect(h.model.settings?.id == "mp4")
+        #expect(h.model.settings?.video.codec == "h264")
+        #expect(h.model.settings?.video.quality == 1)
+        h.model.settings = catalog.settingVideoCodec(h.model.settings!, to: "hevc")
+        let p720 = try #require(catalog.domains.resolutions.first { $0.id == "720p" })
+        h.model.select(container: mp4, resolution: p720)
+        let s = try #require(h.model.settings)
+        #expect(s.video.codec == "hevc", "a resolution on the same format keeps the codec")
+        #expect(s.video.maxWidth == 1280 && s.video.maxHeight == 720)
+
+        h.model.add(urls: [URL(fileURLWithPath: "/x/clip.mov")])
+        h.model.convertAll()
+        let add = try #require(h.sent.last)
+        #expect(add.op == "add")
+        #expect(add.preset == nil)
+        #expect(add.presetBody == s)
+    }
+
+    @Test func savingCustomPresetSendsSave() throws {
+        let h = Harness()
+        try h.load()
+        var edited = try #require(h.model.settings)
+        edited.audio.bitrate = 256_000
+        h.model.settings = edited
+        h.model.savePreset(edited, name: "  My Phone!  ")
+        let save = try #require(h.sent.last)
+        #expect(save.op == "preset.save")
+        let body = try #require(save.presetBody)
+        #expect(body.id == "my-phone")
+        #expect(body.name == "My Phone!")
+        #expect(body.audio.bitrate == 256_000)
+        #expect(body.description == "MP4 with HEVC (H.265) video and AAC audio.")
+
+        var stored = body
+        stored.custom = true
+        let presets = try #require(h.model.presets) + [stored]
+        h.model.handle(Message(type: "preset.save", reply: "preset.save", presets: presets))
+        #expect(h.model.presetID == "my-phone")
+        #expect(h.model.settings == stored)
+        #expect(h.model.customPresets.map(\.id) == ["my-phone"])
+        #expect(!h.model.isEdited)
+
+        h.model.deletePreset("my-phone")
+        #expect(h.sent.last == Request(id: "preset.delete", op: "preset.delete", preset: "my-phone"))
+        h.model.handle(Message(type: "preset.delete", reply: "preset.delete", presets: Array(presets.dropLast())))
+        #expect(h.model.presetID == "apple", "a deleted selection falls back to the first preset")
+
+        h.model.savePreset(edited, name: "Apple")
+        #expect(h.sent.last?.presetBody?.id == "apple-custom", "built-in IDs are never overwritten")
+        h.model.handle(try decode(#"{"type":"error","reply":"preset.save","error":"preset exists"}"#))
+        #expect(h.model.presetError == "preset exists")
+        #expect(h.model.fault == nil)
+    }
+
+    @Test func perFileOverrideSendsInlineBody() throws {
+        let h = Harness()
+        try h.load()
+        h.model.add(urls: [URL(fileURLWithPath: "/x/a.mov"), URL(fileURLWithPath: "/x/b.mov")])
+        let (a, b) = (h.model.items[0], h.model.items[1])
+        let base = try #require(h.model.settings)
+        let catalog = try #require(h.model.catalog)
+        let own = catalog.retarget(base, to: try #require(catalog.container(id: "mkv")))
+        h.model.override(a.id, with: own)
+        h.model.override(b.id, with: base)
+        #expect(h.model.items[0].settings == own)
+        #expect(h.model.items[1].settings == nil, "settings equal to the window's are no override")
+
+        h.model.convertAll()
+        let adds = h.sent.filter { $0.op == "add" }
+        #expect(adds.count == 2)
+        #expect(adds[0].input == "/x/a.mov" && adds[0].preset == nil && adds[0].presetBody == own)
+        #expect(adds[1].input == "/x/b.mov" && adds[1].preset == "apple" && adds[1].presetBody == nil)
+
+        h.model.override(a.id, with: nil)
+        #expect(h.model.items[0].settings == own, "a submitted file keeps its settings")
+        h.model.handle(try decode(#"{"type":"error","reply":"add:\#(a.id.uuidString)","error":"bad"}"#))
+        h.model.retry(a.id)
+        #expect(h.model.items[0].settings == own, "retry keeps the file's own settings")
+    }
+
+    @Test func inlinePresetEncodesBackendKeys() throws {
+        let h = Harness()
+        try h.load()
+        let body = try #require(h.model.settings)
+        let data = try JSONEncoder().encode(Request(id: "1", op: "add", input: "/x/a.mov", presetBody: body))
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let preset = try #require(json["presetBody"] as? [String: Any])
+        #expect(preset["container"] as? String == "mp4")
+        let video = try #require(preset["video"] as? [String: Any])
+        #expect(video["rateControl"] as? String == "quality")
+        #expect(video["maxWidth"] as? Int == 3840)
+    }
+
+    @Test func catalogAudioRules() throws {
+        let h = Harness()
+        try h.load()
+        let catalog = try #require(h.model.catalog)
+        let mp3 = try #require(catalog.codec(id: "mp3"))
+        #expect(catalog.maxAudioBitrate(for: mp3, sampleRate: 22050, channels: 2) == 160_000)
+        #expect(catalog.maxAudioBitrate(for: mp3, sampleRate: nil, channels: nil) == 320_000)
+        #expect(catalog.audioBitrates(for: mp3, sampleRate: nil, channels: nil).last == 320_000)
+        let opus = try #require(catalog.codec(id: "opus"))
+        #expect(catalog.maxAudioBitrate(for: opus, sampleRate: 48000, channels: 1) == 256_000)
+        let flac = try #require(catalog.codec(id: "flac"))
+        #expect(catalog.audioBitrates(for: flac, sampleRate: nil, channels: nil).isEmpty)
+        let aac = try #require(catalog.codec(id: "aac"))
+        let m4a = try #require(catalog.container(id: "m4a"))
+        #expect(catalog.sampleRates(for: aac, in: m4a).contains(96000), "the software aac encoder goes past 48 kHz")
+        let swf = try #require(catalog.container(id: "swf"))
+        let swfAudio = catalog.audioSettings(mp3, in: swf, keeping: Preset.Audio(codec: "", sampleRate: 48000))
+        #expect(swfAudio.sampleRate == 44100, "a container's own rate list wins")
+        #expect(!catalog.isUsable(try #require(catalog.container(id: "amr"))))
+        #expect(Converter.presetID(for: "---", taken: []) == "preset")
+        #expect(Converter.presetID(for: "Recent", taken: []) == "recent-custom")
     }
 
     @Test func splitReply() {

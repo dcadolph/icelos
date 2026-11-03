@@ -8,12 +8,14 @@ struct JobList: View {
     @Bindable var model: Converter
     /// targeted is true while files hover.
     let targeted: Bool
+    /// editSettings opens the settings sheet for one file.
+    let editSettings: (UUID) -> Void
 
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 8) {
                 ForEach(model.items) { item in
-                    JobRow(item: item, model: model)
+                    JobRow(item: item, model: model, editSettings: editSettings)
                 }
             }
             .padding(.vertical, 4)
@@ -33,6 +35,8 @@ struct JobRow: View {
     let item: Item
     /// model receives actions.
     let model: Converter
+    /// editSettings opens the settings sheet for one file.
+    let editSettings: (UUID) -> Void
 
     var body: some View {
         HStack(spacing: 14) {
@@ -89,8 +93,7 @@ struct JobRow: View {
     @ViewBuilder private var detail: some View {
         switch item.phase {
         case .pending:
-            secondary(item.probeError ?? item.info.map(Format.summary) ?? "Reading…",
-                      color: item.probeError == nil ? nil : Theme.ember)
+            secondary(item.probeError ?? pendingText, color: item.probeError == nil ? nil : Theme.ember)
         case .queued:
             secondary("Waiting…")
         case .running:
@@ -106,6 +109,13 @@ struct JobRow: View {
         case .canceled:
             secondary("Canceled.")
         }
+    }
+
+    /// pendingText describes a file waiting for Convert, with its own settings when it has them.
+    private var pendingText: String {
+        let summary = item.info.map(Format.summary) ?? "Reading…"
+        guard let s = item.settings else { return summary }
+        return "\(summary) · Own settings: \(s.ext.uppercased())"
     }
 
     /// runningText describes live progress.
@@ -170,6 +180,10 @@ struct JobRow: View {
     /// menu is the row context menu.
     @ViewBuilder private var menu: some View {
         Button("Show Original in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
+        if item.phase == .pending && item.probeError == nil {
+            Button("Settings for This File…") { editSettings(item.id) }
+            if item.settings != nil { Button("Use Window Settings") { model.override(item.id, with: nil) } }
+        }
         if item.phase == .done { Button("Show Output in Finder") { reveal() } }
         if item.phase == .queued || item.phase == .running { Button("Cancel") { model.cancel(item.id) } }
         if !(item.phase == .queued || item.phase == .running) { Button("Remove") { model.remove(item.id) } }

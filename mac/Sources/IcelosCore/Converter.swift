@@ -40,6 +40,8 @@ public struct Item: Identifiable, Sendable, Equatable {
     public var addError: String?
     /// outputSize is the finished file size.
     public var outputSize: Int64?
+    /// settings overrides the window settings for this file when set.
+    public var settings: Preset?
 
     /// phase summarizes the item state.
     public var phase: Phase {
@@ -68,8 +70,10 @@ public struct Item: Identifiable, Sendable, Equatable {
 @MainActor
 @Observable
 public final class Converter {
-    /// presets are the built-in presets in display order.
+    /// presets are the built-in presets in display order, then the custom ones.
     public private(set) var presets: [Preset] = []
+    /// catalog is the format catalog, once the backend sends it.
+    public private(set) var catalog: Catalog?
     /// items are the files in the window in the order they were added.
     public private(set) var items: [Item] = []
     /// encoders lists the usable ffmpeg encoders.
@@ -78,8 +82,15 @@ public final class Converter {
     public private(set) var version: String?
     /// fault is a problem with the converter itself.
     public private(set) var fault: String?
-    /// presetID is the selected preset.
-    public var presetID = "apple"
+    /// presetID is the selected built-in or custom preset, or empty when the settings come
+    /// straight from the catalog. Selecting a preset replaces the settings with a copy of it.
+    public var presetID = "apple" {
+        didSet { if let p = preset(id: presetID) { settings = p } }
+    }
+    /// settings is the editable copy of what the next Convert produces.
+    public var settings: Preset?
+    /// presetError is the latest problem saving, deleting, or reading custom presets.
+    public private(set) var presetError: String?
     /// hardware prefers the media engine.
     public var hardware = true
     /// targetSize is the size for the target-size preset.
@@ -89,6 +100,8 @@ public final class Converter {
 
     /// send delivers a request to the backend.
     @ObservationIgnored private let send: (Request) -> Void
+    /// savingID is the ID of the custom preset being saved, selected once the save lands.
+    @ObservationIgnored private var savingID: String?
     /// early holds job events that arrived before their add reply.
     @ObservationIgnored private var early: [String: JobStatus] = [:]
     /// fileSize reads a file size, injectable for tests.
@@ -106,8 +119,24 @@ public final class Converter {
         (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value
     }
 
-    /// selectedPreset is the preset for presetID.
-    public var selectedPreset: Preset? { presets.first { $0.id == presetID } }
+    /// preset returns the built-in or custom preset with id.
+    public func preset(id: String) -> Preset? { presets.first { $0.id == id } }
+
+    /// builtinPresets lists the built-in presets.
+    public var builtinPresets: [Preset] { presets.filter { !$0.isCustom } }
+
+    /// customPresets lists the presets the user saved.
+    public var customPresets: [Preset] { presets.filter(\.isCustom) }
+
+    /// container is the catalog container of the settings.
+    public var container: Container? { catalog?.container(id: settings?.container) }
+
+    /// isEdited is true when the settings differ from the selected preset, or no preset is
+    /// selected.
+    public var isEdited: Bool {
+        guard let settings else { return false }
+        return preset(id: presetID) != settings
+    }
 
     /// hasHardware is true when a VideoToolbox encoder is available.
     public var hasHardware: Bool { encoders.contains { $0.hasSuffix("_videotoolbox") } }
@@ -148,15 +177,84 @@ public final class Converter {
         }
     }
 
-    /// convertAll submits every pending, readable item with the current settings.
+    /// convertAll submits every pending, readable item. An unedited preset goes by ID, so the
+    /// backend records it as recently used; edited settings and per-file overrides go inline.
     public func convertAll() {
-        guard let preset = selectedPreset else { return }
+        guard let base = settings else { return }
         for i in items.indices where items[i].phase == .pending && items[i].probeError == nil {
             items[i].submitted = true
+            let p = items[i].settings ?? base
+            let byID = items[i].settings == nil && !isEdited
             send(Request(id: "add:" + items[i].id.uuidString, op: "add", input: items[i].url.path,
-                         preset: preset.id, size: preset.needsSize ? targetSize : nil,
-                         hardware: hardware, outDir: outputFolder?.path))
+                         preset: byID ? p.id : nil, presetBody: byID ? nil : p,
+                         size: p.needsSize ? targetSize : nil, hardware: hardware,
+                         outDir: outputFolder?.path))
         }
+    }
+
+    /// select makes the catalog's starting settings for container c, at a resolution, the window
+    /// settings. Picking a resolution on the container already selected keeps the other edits.
+    public func select(container c: Container, resolution: Resolution? = nil) {
+        guard let catalog else { return }
+        if presetID.isEmpty, let current = settings, current.container == c.id {
+            if let resolution { settings = catalog.fitting(current, into: resolution) }
+            return
+        }
+        presetID = ""
+        settings = catalog.target(for: c, resolution: resolution)
+    }
+
+    /// setContainer moves the window settings into the container with id, resetting the codecs
+    /// to the container's first available ones.
+    public func setContainer(_ id: String) {
+        guard let catalog, let c = catalog.container(id: id), let current = settings else { return }
+        settings = catalog.retarget(current, to: c)
+    }
+
+    /// override sets the settings for one pending file. Settings equal to the window settings, or
+    /// nil, clear the override.
+    public func override(_ id: UUID, with preset: Preset?) {
+        update(id) { item in
+            guard item.phase == .pending else { return }
+            item.settings = preset == settings ? nil : preset
+        }
+    }
+
+    /// savePreset asks the backend to save p as a custom preset named name. The new preset is
+    /// selected once the save lands.
+    public func savePreset(_ p: Preset, name: String) {
+        var body = p
+        body.id = Converter.presetID(for: name, taken: builtinPresets.map(\.id))
+        body.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        body.description = catalog?.summary(p) ?? p.description
+        body.custom = nil
+        body.targetBytes = nil
+        savingID = body.id
+        presetError = nil
+        send(Request(id: "preset.save", op: "preset.save", presetBody: body))
+    }
+
+    /// deletePreset asks the backend to delete the custom preset with id.
+    public func deletePreset(_ id: String) {
+        presetError = nil
+        send(Request(id: "preset.delete", op: "preset.delete", preset: id))
+    }
+
+    /// presetID turns a preset name into an ID the backend accepts, steering clear of built-in IDs.
+    static func presetID(for name: String, taken: [String]) -> String {
+        var id = ""
+        for ch in name.lowercased() {
+            if ch.isASCII && (ch.isLetter || ch.isNumber) {
+                id.append(ch)
+            } else if !id.isEmpty && id.last != "-" {
+                id.append("-")
+            }
+        }
+        while id.hasSuffix("-") { id.removeLast() }
+        id = String(id.prefix(56))
+        if id.isEmpty { id = "preset" }
+        if taken.contains(id) || id == "recent" { id += "-custom" }
+        return id
     }
 
     /// cancel stops a queued or running item.
@@ -170,7 +268,7 @@ public final class Converter {
         guard let i = items.firstIndex(where: { $0.id == id }), items[i].phase == .failed || items[i].phase == .canceled,
               items[i].probeError == nil else { return }
         let old = items[i]
-        items[i] = Item(id: UUID(), url: old.url, info: old.info)
+        items[i] = Item(id: UUID(), url: old.url, info: old.info, settings: old.settings)
     }
 
     /// remove drops an item that is not queued or running.
@@ -202,9 +300,11 @@ public final class Converter {
             version = m.version
             send(Request(id: "presets", op: "presets"))
             send(Request(id: "capabilities", op: "capabilities"))
-        case "presets":
-            presets = m.presets ?? []
-            if !presets.contains(where: { $0.id == presetID }), let first = presets.first { presetID = first.id }
+            send(Request(id: "catalog", op: "catalog"))
+        case "presets", "preset.save", "preset.delete":
+            applyPresets(m)
+        case "catalog":
+            catalog = m.catalog
         case "capabilities":
             encoders = m.encoders ?? []
             if !hasHardware { hardware = false }
@@ -223,10 +323,28 @@ public final class Converter {
             case "probe": update(itemID) { $0.probeError = text }
             case "add": update(itemID) { $0.addError = text }
             case "cancel": break
+            case "preset.save", "preset.delete":
+                savingID = nil
+                presetError = text
             default: fault = text
             }
         default:
             break
+        }
+    }
+
+    /// applyPresets takes a presets list. A finished save selects the saved preset; a selection
+    /// that is gone falls back to the first preset; edited settings are left alone otherwise.
+    private func applyPresets(_ m: Message) {
+        presets = m.presets ?? []
+        presetError = m.warning
+        if m.type == "preset.save", let id = savingID {
+            savingID = nil
+            presetID = id
+        } else if !presetID.isEmpty, preset(id: presetID) == nil, let first = presets.first {
+            presetID = first.id
+        } else if settings == nil, let p = preset(id: presetID) {
+            settings = p
         }
     }
 

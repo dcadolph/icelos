@@ -7,12 +7,16 @@ struct ContentView: View {
     @Bindable var model: Converter
     /// dropTargeted is true while files hover over the window.
     @State private var dropTargeted = false
+    /// tab is the output picker page shown.
+    @State private var tab = PickerTab.presets
+    /// editing is the settings sheet shown, if any.
+    @State private var editing: Editing?
 
     var body: some View {
         VStack(spacing: 0) {
             header
             if let fault = model.fault { FaultBanner(text: fault) }
-            PresetPicker(model: model)
+            PresetPicker(model: model, tab: $tab) { editing = .window }
                 .padding(.horizontal, 24)
                 .padding(.top, 6)
             OptionsBar(model: model)
@@ -22,7 +26,7 @@ struct ContentView: View {
                 if model.items.isEmpty {
                     DropZone(targeted: dropTargeted) { MediaFiles.choose { model.add(urls: $0) } }
                 } else {
-                    JobList(model: model, targeted: dropTargeted)
+                    JobList(model: model, targeted: dropTargeted) { editing = .item($0) }
                 }
             }
             .padding(.horizontal, 24)
@@ -35,7 +39,34 @@ struct ContentView: View {
             model.add(urls: files)
             return !files.isEmpty
         } isTargeted: { dropTargeted = $0 }
+        .sheet(item: $editing) { sheet(for: $0) }
         .preferredColorScheme(.dark)
+    }
+
+    /// sheet builds the settings sheet for the window settings or one file's override.
+    @ViewBuilder private func sheet(for target: Editing) -> some View {
+        if let catalog = model.catalog, let base = model.settings {
+            switch target {
+            case .window:
+                let original = model.preset(id: model.presetID)
+                    ?? catalog.container(id: base.container).map { catalog.target(for: $0) } ?? base
+                SettingsSheet(catalog: catalog, title: "Settings for \(base.name)", current: base,
+                              original: original, error: model.presetError,
+                              apply: { model.settings = $0 }, save: model.savePreset)
+            case .item(let id):
+                let item = model.items.first { $0.id == id }
+                SettingsSheet(catalog: catalog,
+                              title: "Settings for \(item?.url.lastPathComponent ?? "this file")",
+                              current: item?.settings ?? base, original: base, error: model.presetError,
+                              apply: { model.override(id, with: $0) }, save: model.savePreset)
+            }
+        } else {
+            VStack(spacing: 12) {
+                Text("The format list has not arrived from the converter yet.")
+                Button("Close") { editing = nil }
+            }
+            .padding(24)
+        }
     }
 
     /// header shows the wordmark and the encoder status.
@@ -82,7 +113,7 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(Theme.emerald)
-            .disabled(model.pendingCount == 0 || model.selectedPreset == nil)
+            .disabled(model.pendingCount == 0 || model.settings == nil)
             .keyboardShortcut(.return, modifiers: .command)
         }
         .controlSize(.large)
@@ -133,7 +164,7 @@ struct OptionsBar: View {
 
     var body: some View {
         HStack(spacing: 18) {
-            if model.selectedPreset?.needsSize == true {
+            if model.settings?.needsSize == true {
                 HStack(spacing: 6) {
                     Text("Fit under")
                     TextField("25MB", text: $model.targetSize)
@@ -141,10 +172,10 @@ struct OptionsBar: View {
                         .frame(width: 90)
                 }
             }
-            if model.selectedPreset?.isAudioOnly == false {
+            if model.settings?.isAudioOnly == false {
                 Toggle("Use Media Engine", isOn: $model.hardware)
-                    .disabled(!model.hasHardware || model.selectedPreset?.needsSize == true)
-                    .help(model.selectedPreset?.needsSize == true
+                    .disabled(!model.hasHardware || model.settings?.needsSize == true)
+                    .help(model.settings?.needsSize == true
                           ? "Size targeting uses two software passes for accuracy."
                           : "Encode on the Apple media engine. Falls back to software if it fails.")
             }
@@ -193,4 +224,15 @@ struct DropZone: View {
         }
         .animation(.easeOut(duration: 0.2), value: targeted)
     }
+}
+
+/// Editing names what a settings sheet edits.
+enum Editing: Identifiable, Hashable {
+    /// window edits the settings for every file without an override.
+    case window
+    /// item edits the override for one file.
+    case item(UUID)
+
+    /// id identifies the sheet.
+    var id: Self { self }
 }
