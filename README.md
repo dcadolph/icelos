@@ -6,9 +6,19 @@ A free, open source video and audio converter for Mac.
 
 Icelos takes video and audio files in and hands them back in a new format or a smaller size. It runs on your machine, needs no account, and shows no upsells or trial limits.
 
+## Download
+
+[Download Icelos for Mac](https://github.com/dcadolph/icelos/releases/latest/download/Icelos_macos_universal.dmg). The app is signed and notarized by Apple and includes its own FFmpeg, so nothing else needs to be installed. It runs on macOS 14 or later, on Apple silicon and Intel.
+
+With Homebrew:
+
+```sh
+brew install --cask dcadolph/tap/icelos
+```
+
 ## Status
 
-Early. The command line tool has release archives for macOS, Linux, and Windows on the [releases page](https://github.com/dcadolph/icelos/releases), each with a signed checksum file and build provenance. It needs FFmpeg on the PATH. The Mac app works from source and has no signed build yet. The goals below describe where the project is headed, not what works today.
+Early. The Mac app is on the [releases page](https://github.com/dcadolph/icelos/releases) as a DMG and a zip, with a signed checksum file and build provenance. The command line tool has release archives for macOS, Linux, and Windows there too, each with a signed checksum file and build provenance. It needs FFmpeg on the PATH. The goals below describe where the project is headed, not what works today.
 
 What works today:
 
@@ -20,7 +30,7 @@ What works today:
 - Size estimates on each file before it converts, and the Apple media engine for H.264, HEVC, and ProRes.
 - Twelve themes with light and dark appearance, and a Settings window for the default destination, the media engine, and a CPU limit.
 
-Homebrew's FFmpeg lacks a few encoders, so Theora (OGV), Vorbis (OGG audio), and AMR-NB show as unavailable, and burning in text subtitles needs FFmpeg built with libass. A bundled FFmpeg build will cover them.
+The app's bundled FFmpeg writes every format in the catalog, including Theora (OGV), Vorbis (OGG audio), and AMR-NB, and burns in text subtitles through libass. Homebrew's FFmpeg lacks those encoders and libass, so a source build or the command line on Homebrew's FFmpeg shows them as unavailable. `mac/build-ffmpeg.sh` builds the same FFmpeg the app ships, from the pinned sources in `mac/ffmpeg-sources.txt`, and `Icelos.app/Contents/Resources/THIRD_PARTY.md` lists each bundled library and its license.
 
 ## Build from source
 

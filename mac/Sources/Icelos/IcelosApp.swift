@@ -26,6 +26,9 @@ struct IcelosApp: App {
         .windowToolbarStyle(.unified(showsTitle: false))
         .defaultSize(width: 920, height: 680)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About Icelos") { AboutPanel.show() }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Add Files…") { MediaFiles.choose { session.model.add(urls: $0) } }
                     .keyboardShortcut(AppCommand.addFiles.shortcut)
@@ -115,4 +118,29 @@ final class WindowState {
     var search = ""
     /// searching is true while the sidebar search field has focus.
     var searching = false
+}
+
+/// AboutPanel shows the standard About panel with the tagline and the bundled notices.
+@MainActor
+enum AboutPanel {
+    /// Shows the panel. The credits link to THIRD_PARTY.md when the bundle carries it, and the
+    /// panel's text view opens the link through NSWorkspace in the default viewer.
+    static func show() {
+        let center = NSMutableParagraphStyle()
+        center.alignment = .center
+        let base: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
+            .foregroundColor: NSColor.labelColor,
+            .paragraphStyle: center,
+        ]
+        let credits = NSMutableAttributedString(string: "Form is never final.", attributes: base)
+        if let notices = Bundle.main.url(forResource: "THIRD_PARTY", withExtension: "md") {
+            var link = base
+            link[.link] = notices
+            credits.append(NSAttributedString(string: "\n\n", attributes: base))
+            credits.append(NSAttributedString(string: "Third-party software", attributes: link))
+        }
+        NSApplication.shared.orderFrontStandardAboutPanel(options: [.credits: credits])
+        NSApplication.shared.activate()
+    }
 }
