@@ -292,6 +292,83 @@ private final class Harness {
         #expect(h.model.items[0].settings == own, "retry keeps the file's own settings")
     }
 
+    @Test func inspectorRoutesEditsBySelection() throws {
+        let h = Harness()
+        try h.load()
+        h.model.add(urls: [URL(fileURLWithPath: "/x/a.mov"), URL(fileURLWithPath: "/x/b.mov")])
+        let (a, b) = (h.model.items[0].id, h.model.items[1].id)
+        let base = try #require(h.model.settings)
+        #expect(h.model.inspectorScope == .window)
+
+        h.model.selection = a
+        #expect(h.model.inspectorScope == .item(a, name: "a.mov", usesWindow: true))
+        var edited = base
+        edited.audio.bitrate = 96_000
+        h.model.editInspected(edited)
+        #expect(h.model.settings == edited, "a file on the window settings edits the window settings")
+        #expect(h.model.items[0].settings == nil)
+
+        h.model.setUsesWindowSettings(a, false)
+        #expect(h.model.inspectorScope == .item(a, name: "a.mov", usesWindow: false))
+        #expect(h.model.items[0].settings == edited, "the override starts as a copy of the window settings")
+        #expect(h.model.inspected == edited)
+        var own = edited
+        own.audio.bitrate = 320_000
+        h.model.editInspected(own)
+        #expect(h.model.items[0].settings == own, "edits go to the override")
+        #expect(h.model.settings == edited, "the window settings are untouched")
+        #expect(h.model.items[1].settings == nil)
+        #expect(h.model.inspectedOriginal == edited, "Reset on an override goes back to the window settings")
+        h.model.editInspected(edited)
+        #expect(h.model.inspectorScope == .item(a, name: "a.mov", usesWindow: false),
+                "an override equal to the window settings stays an override")
+
+        h.model.selection = b
+        #expect(h.model.inspected == edited)
+        h.model.convertAll()
+        #expect(h.model.inspectorScope == .window, "a submitted file is no longer editable")
+
+        h.model.setUsesWindowSettings(a, true)
+        #expect(h.model.items[0].settings == edited, "a submitted file keeps its settings")
+    }
+
+    @Test func removingTheSelectionClearsIt() throws {
+        let h = Harness()
+        try h.load()
+        h.model.add(urls: [URL(fileURLWithPath: "/x/a.mov")])
+        let a = h.model.items[0].id
+        h.model.selection = a
+        #expect(h.model.canRemoveSelection)
+        h.model.removeSelection()
+        #expect(h.model.items.isEmpty)
+        #expect(h.model.selection == nil)
+        #expect(!h.model.canRemoveSelection)
+    }
+
+    @Test func choosingTargets() throws {
+        let h = Harness()
+        try h.load()
+        #expect(h.model.selectedTargetID == "preset:apple")
+        h.model.choose(.container("mkv"))
+        #expect(h.model.presetID == "")
+        #expect(h.model.settings?.container == "mkv")
+        #expect(h.model.selectedTargetID == "container:mkv")
+        h.model.choose(.container("amr"))
+        #expect(h.model.settings?.container == "mkv", "an unavailable format is not chosen")
+        h.model.choose(.preset("web"))
+        #expect(h.model.selectedTargetID == "preset:web")
+        h.model.settings?.audio.bitrate = 64_000
+        h.model.choose(.preset("web"))
+        #expect(!h.model.isEdited, "choosing the selected preset again drops the edits")
+        h.model.choose(.preset("gone"))
+        #expect(h.model.presetID == "web")
+
+        h.model.handle(Message(type: "presets", reply: "presets", presets: h.model.presets, recent: ["web", "apple"]))
+        #expect(h.model.recent == ["web", "apple"])
+        #expect(h.model.targetSections()[0].targets.map(\.id) == ["recent:web", "recent:apple"])
+        #expect(h.model.targetSections(search: "zzz").allSatisfy { $0.targets.isEmpty })
+    }
+
     @Test func inlinePresetEncodesBackendKeys() throws {
         let h = Harness()
         try h.load()

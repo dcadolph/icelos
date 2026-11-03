@@ -1,65 +1,154 @@
 import IcelosCore
 import SwiftUI
 
-/// SettingsSheet edits one set of conversion settings with controls built from the catalog, so a
-/// new codec in the backend needs no change here.
-struct SettingsSheet: View {
-    /// catalog supplies the containers, codecs, and value lists.
-    let catalog: Catalog
-    /// title names what is being edited.
-    let title: String
-    /// original is what Reset goes back to.
-    let original: Preset
-    /// error is the latest preset save problem.
-    let error: String?
-    /// apply receives the edited settings on Done.
-    let apply: (Preset) -> Void
-    /// save stores the edited settings as a custom preset with a name.
-    let save: (Preset, String) -> Void
-
-    /// draft is the settings being edited.
-    @State private var draft: Preset
+/// Inspector edits the window settings, or the selected file's own settings, live as the user
+/// changes them. Nothing about it is modal.
+struct Inspector: View {
+    /// model is the window state.
+    @Bindable var model: Converter
     /// presetName is the name typed for Save as Preset.
     @State private var presetName = ""
     /// naming is true while the Save as Preset field shows.
     @State private var naming = false
-    /// dismiss closes the sheet.
-    @Environment(\.dismiss) private var dismiss
-
-    /// Creates a sheet that starts from current and resets to original.
-    init(catalog: Catalog, title: String, current: Preset, original: Preset, error: String?,
-         apply: @escaping (Preset) -> Void, save: @escaping (Preset, String) -> Void) {
-        self.catalog = catalog
-        self.title = title
-        self.original = original
-        self.error = error
-        self.apply = apply
-        self.save = save
-        _draft = State(initialValue: current)
-    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            Text(title)
-                .font(.headline)
-                .padding(.top, 18)
-            Form {
-                formatSection
-                if container?.kind == "video" { videoSection }
-                audioSection
+        Group {
+            if let catalog = model.catalog, let current = model.inspected {
+                SettingsForm(catalog: catalog,
+                             draft: Binding(get: { model.inspected ?? current }, set: { model.editInspected($0) }),
+                             targetSize: $model.targetSize)
+            } else {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .formStyle(.grouped)
-            if let error {
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                header
+                Divider()
+            }
+            .background(Theme.surface)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                footer
+            }
+            .background(Theme.surface)
+        }
+        .background(Theme.surface)
+        // A small ideal height keeps the form's full height from becoming the window's size.
+        .frame(minHeight: 0, idealHeight: 200, maxHeight: .infinity)
+    }
+
+    /// header says what the inspector edits, with the switch between a file's own settings and the
+    /// window settings when a file is selected.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.title3.weight(.semibold))
+                .lineLimit(2)
+                .truncationMode(.middle)
+            if let summary {
+                Text(summary)
+                    .font(.callout)
+                    .foregroundStyle(Theme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if case .item(let id, let name, let usesWindow) = model.inspectorScope {
+                Toggle("Use window settings", isOn: Binding(
+                    get: { usesWindow },
+                    set: { model.setUsesWindowSettings(id, $0) }))
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .help("Turn off to give \(name) its own settings. The other files keep the window settings.")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+    }
+
+    /// title names what the form edits.
+    private var title: String {
+        if case .item(_, let name, false) = model.inspectorScope { return "Override for \(name)" }
+        return "Window settings"
+    }
+
+    /// summary describes the inspected settings in a sentence.
+    private var summary: String? {
+        guard let p = model.inspected else { return nil }
+        let line = model.catalog?.summary(p) ?? p.ext.uppercased()
+        if case .item = model.inspectorScope { return line }
+        if model.presetID.isEmpty { return line }
+        return model.isEdited ? "\(p.name), edited. \(line)" : "\(p.name). \(line)"
+    }
+
+    /// footer holds Reset and Save as Preset, and the latest preset problem.
+    private var footer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let error = model.presetError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
                     .foregroundStyle(Theme.danger)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 20)
                     .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            footer
+            HStack(spacing: 8) {
+                Button("Reset") {
+                    if let original = model.inspectedOriginal { model.editInspected(original) }
+                }
+                .help("Go back to the settings of the chosen preset or format.")
+                .disabled(model.inspected == nil || model.inspected == model.inspectedOriginal)
+                Spacer(minLength: 0)
+                if naming {
+                    TextField("Preset name", text: $presetName)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(maxWidth: 140)
+                        .onSubmit(save)
+                        .onExitCommand { naming = false }
+                    Button("Save", action: save)
+                        .disabled(presetName.trimmingCharacters(in: .whitespaces).isEmpty)
+                } else {
+                    Button("Save as Preset…") { naming = true }
+                        .help("Keep these settings as a preset in the Custom section.")
+                        .disabled(model.inspected == nil)
+                }
+            }
         }
-        .frame(width: 520, height: 640)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    /// save sends the inspected settings to be saved as a custom preset.
+    private func save() {
+        let name = presetName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty, let p = model.inspected else { return }
+        model.savePreset(p, name: name)
+        naming = false
+        presetName = ""
+    }
+}
+
+/// SettingsForm edits one set of conversion settings with controls built from the catalog, so a
+/// new codec in the backend needs no change here.
+struct SettingsForm: View {
+    /// catalog supplies the containers, codecs, and value lists.
+    let catalog: Catalog
+    /// draft is the settings being edited, applied as each control changes.
+    @Binding var draft: Preset
+    /// targetSize is the size the target-size preset aims for.
+    @Binding var targetSize: String
+
+    var body: some View {
+        Form {
+            formatSection
+            if container?.kind == "video" { videoSection }
+            audioSection
+        }
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
     }
 
     /// container is the draft's catalog container.
@@ -85,6 +174,15 @@ struct SettingsSheet: View {
                 }
             }
             .help("The file type to write. Changing it resets the encoders to ones this format carries.")
+            if draft.needsSize {
+                LabeledContent("Fit under") {
+                    TextField("25MB", text: $targetSize)
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 90)
+                }
+                .help("The size each file should come in under, such as 25MB or 1.5GB.")
+            }
         }
     }
 
@@ -382,45 +480,6 @@ struct SettingsSheet: View {
             draft.audio.bitrate = catalog.audioBitrates(for: codec, sampleRate: draft.audio.sampleRate,
                                                         channels: draft.audio.channels).last ?? cap
         }
-    }
-
-    /// footer holds Reset, Save as Preset, Cancel, and Done.
-    private var footer: some View {
-        HStack(spacing: 10) {
-            Button("Reset") { draft = original }
-            .help("Go back to the settings this sheet started from.")
-                .disabled(draft == original)
-            if naming {
-                TextField("Preset name", text: $presetName)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 160)
-                    .onSubmit(saveDraft)
-                Button("Save", action: saveDraft)
-                    .disabled(presetName.trimmingCharacters(in: .whitespaces).isEmpty)
-            } else {
-                Button("Save as Preset…") { naming = true }
-                .help("Keep these settings as a preset on the Custom tab.")
-            }
-            Spacer()
-            Button("Cancel", role: .cancel) { dismiss() }
-                .keyboardShortcut(.cancelAction)
-            Button("Done") {
-                apply(draft)
-                dismiss()
-            }
-            .keyboardShortcut(.defaultAction)
-            .disabled(sizeProblem != nil && (draft.video.width != nil || draft.video.height != nil))
-        }
-        .padding(16)
-    }
-
-    /// saveDraft sends the draft to be saved as a custom preset.
-    private func saveDraft() {
-        let name = presetName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
-        save(draft, name)
-        naming = false
-        presetName = ""
     }
 
     /// note is a secondary line of explanation.

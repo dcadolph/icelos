@@ -8,24 +8,44 @@ struct JobList: View {
     @Bindable var model: Converter
     /// targeted is true while files hover.
     let targeted: Bool
-    /// editSettings opens the settings sheet for one file.
+    /// editSettings gives one file its own settings in the inspector.
     let editSettings: (UUID) -> Void
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 8) {
-                ForEach(model.items) { item in
-                    JobRow(item: item, model: model, editSettings: editSettings)
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 8) {
+                    ForEach(model.items) { item in
+                        JobRow(item: item, model: model, selected: item.id == model.selection,
+                               editSettings: editSettings)
+                            .id(item.id)
+                    }
                 }
+                .padding(.vertical, 4)
             }
-            .padding(.vertical, 4)
+            .scrollIndicators(.automatic)
+            .focusable()
+            .focusEffectDisabled()
+            .onKeyPress(.upArrow) { move(-1, proxy) }
+            .onKeyPress(.downArrow) { move(1, proxy) }
+            .onDeleteCommand { model.removeSelection() }
+            .onExitCommand { model.selection = nil }
         }
-        .scrollIndicators(.automatic)
         .overlay {
-            RoundedRectangle(cornerRadius: 14)
+            RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(Theme.accent.opacity(targeted ? 0.7 : 0), lineWidth: 1.5)
                 .allowsHitTesting(false)
         }
+    }
+
+    /// move selects the file step rows away from the selection and scrolls it into view.
+    private func move(_ step: Int, _ proxy: ScrollViewProxy) -> KeyPress.Result {
+        guard !model.items.isEmpty else { return .ignored }
+        let current = model.items.firstIndex { $0.id == model.selection }
+        let next = current.map { min(max($0 + step, 0), model.items.count - 1) } ?? (step > 0 ? 0 : model.items.count - 1)
+        model.selection = model.items[next].id
+        proxy.scrollTo(model.items[next].id)
+        return .handled
     }
 }
 
@@ -35,7 +55,9 @@ struct JobRow: View {
     let item: Item
     /// model receives actions.
     let model: Converter
-    /// editSettings opens the settings sheet for one file.
+    /// selected is true for the file the inspector follows.
+    let selected: Bool
+    /// editSettings gives one file its own settings in the inspector.
     let editSettings: (UUID) -> Void
 
     var body: some View {
@@ -52,7 +74,11 @@ struct JobRow: View {
             actions
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.fill()))
+        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.fill(selected: selected)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? Theme.accent.opacity(0.6) : Theme.border))
+        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .onTapGesture { model.selection = item.id }
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
         .contextMenu { menu }
         .animation(.easeOut(duration: 0.2), value: item.phase)
     }
@@ -181,8 +207,11 @@ struct JobRow: View {
     @ViewBuilder private var menu: some View {
         Button("Show Original in Finder") { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
         if item.phase == .pending && item.probeError == nil {
-            Button("Settings for This File…") { editSettings(item.id) }
-            if item.settings != nil { Button("Use Window Settings") { model.override(item.id, with: nil) } }
+            if item.settings == nil {
+                Button("Use Own Settings") { editSettings(item.id) }
+            } else {
+                Button("Use Window Settings") { model.setUsesWindowSettings(item.id, true) }
+            }
         }
         if item.phase == .done { Button("Show Output in Finder") { reveal() } }
         if item.phase == .queued || item.phase == .running { Button("Cancel") { model.cancel(item.id) } }

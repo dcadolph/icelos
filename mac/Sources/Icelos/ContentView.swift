@@ -1,108 +1,150 @@
+import AppKit
 import IcelosCore
 import SwiftUI
 
-/// ContentView is the single window: presets on top, files in the middle, actions below.
+/// ContentView is the window: output choices in the sidebar, files in the middle, and the settings
+/// in the inspector.
 struct ContentView: View {
     /// model is the window state.
     @Bindable var model: Converter
+    /// window holds the view-only state the menu commands also reach.
+    @Bindable var window: WindowState
     /// dropTargeted is true while files hover over the window.
     @State private var dropTargeted = false
-    /// tab is the output picker page shown.
-    @State private var tab = PickerTab.presets
-    /// editing is the settings sheet shown, if any.
-    @State private var editing: Editing?
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            if let fault = model.fault { FaultBanner(text: fault) }
-            PresetPicker(model: model, tab: $tab) { editing = .window }
-                .padding(.horizontal, 24)
-                .padding(.top, 6)
-            OptionsBar(model: model)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 12)
-            Group {
-                if model.items.isEmpty {
-                    DropZone(targeted: dropTargeted) { MediaFiles.choose { model.add(urls: $0) } }
-                } else {
-                    JobList(model: model, targeted: dropTargeted) { editing = .item($0) }
+        NavigationSplitView {
+            TargetList(model: model, search: window.search)
+                .searchable(text: $window.search, isPresented: $window.searching, placement: .sidebar,
+                            prompt: "Search formats")
+                .navigationSplitViewColumnWidth(min: 220, ideal: 236, max: 320)
+        } detail: {
+            VStack(spacing: 0) {
+                if let fault = model.fault { FaultBanner(text: fault) }
+                Group {
+                    if model.items.isEmpty {
+                        DropZone(targeted: dropTargeted) { MediaFiles.choose { model.add(urls: $0) } }
+                    } else {
+                        JobList(model: model, targeted: dropTargeted, editSettings: editOwnSettings)
+                    }
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, 12)
+                BottomBar(model: model)
             }
-            .padding(.horizontal, 24)
-            footer
-        }
-        .foregroundStyle(Theme.text)
-        .background(Theme.backdrop)
-        .dropDestination(for: URL.self) { urls, _ in
-            let files = MediaFiles.expand(urls)
-            model.add(urls: files)
-            return !files.isEmpty
-        } isTargeted: { dropTargeted = $0 }
-        .sheet(item: $editing) { sheet(for: $0) }
-    }
-
-    /// sheet builds the settings sheet for the window settings or one file's override.
-    @ViewBuilder private func sheet(for target: Editing) -> some View {
-        if let catalog = model.catalog, let base = model.settings {
-            switch target {
-            case .window:
-                let original = model.preset(id: model.presetID)
-                    ?? catalog.container(id: base.container).map { catalog.target(for: $0) } ?? base
-                SettingsSheet(catalog: catalog, title: "Settings for \(base.name)", current: base,
-                              original: original, error: model.presetError,
-                              apply: { model.settings = $0 }, save: model.savePreset)
-            case .item(let id):
-                let item = model.items.first { $0.id == id }
-                SettingsSheet(catalog: catalog,
-                              title: "Settings for \(item?.url.lastPathComponent ?? "this file")",
-                              current: item?.settings ?? base, original: base, error: model.presetError,
-                              apply: { model.override(id, with: $0) }, save: model.savePreset)
+            .foregroundStyle(Theme.text)
+            .background(Theme.backdrop)
+            .dropDestination(for: URL.self) { urls, _ in
+                let files = MediaFiles.expand(urls)
+                model.add(urls: files)
+                return !files.isEmpty
+            } isTargeted: { dropTargeted = $0 }
+            .inspector(isPresented: $window.showsInspector) {
+                Inspector(model: model)
+                    .inspectorColumnWidth(min: 280, ideal: 312, max: 420)
             }
-        } else {
-            VStack(spacing: 12) {
-                Text("The format list has not arrived from the converter yet.")
-                Button("Close") { editing = nil }
-            }
-            .padding(24)
+            .toolbar { toolbar }
         }
     }
 
-    /// header shows the wordmark and the encoder status.
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text("icelos")
-                .font(.system(size: 30, weight: .semibold, design: .rounded))
-                .foregroundStyle(Theme.accent)
-            Text("Free video converter")
-                .font(.callout)
-                .foregroundStyle(Theme.muted)
-            Spacer()
-            if !model.encoders.isEmpty {
-                Label(model.hasHardware ? "Media Engine ready" : "Software encoding",
-                      systemImage: model.hasHardware ? "bolt.fill" : "cpu")
-                    .font(.caption.weight(.medium))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(Capsule().fill(Theme.fill()))
-                    .foregroundStyle(model.hasHardware ? Theme.success : Theme.accent)
+    /// toolbar holds Add Files, the destination, the encoder choice, and the inspector toggle.
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarItemGroup(placement: .primaryAction) {
+            Button {
+                MediaFiles.choose { model.add(urls: $0) }
+            } label: {
+                Label("Add Files", systemImage: "plus")
             }
+            .help("Add videos or music to convert.")
+            DestinationMenu(model: model)
+            EngineToggle(model: model)
+            Button {
+                window.showsInspector.toggle()
+            } label: {
+                Label(window.showsInspector ? "Hide Inspector" : "Show Inspector", systemImage: "sidebar.trailing")
+            }
+            .help(window.showsInspector ? "Hide the settings." : "Show the settings.")
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 28)
-        .padding(.bottom, 8)
     }
 
-    /// footer summarizes the run and holds the main actions.
-    private var footer: some View {
+    /// editOwnSettings selects a file, gives it its own copy of the window settings, and shows the
+    /// inspector on it.
+    private func editOwnSettings(_ id: UUID) {
+        model.selection = id
+        model.setUsesWindowSettings(id, false)
+        window.showsInspector = true
+    }
+}
+
+/// DestinationMenu picks where converted files go.
+struct DestinationMenu: View {
+    /// model is the window state.
+    @Bindable var model: Converter
+
+    var body: some View {
+        Menu {
+            Button("Next to Originals") { model.outputFolder = nil }
+            Button("Choose Folder…") { MediaFiles.chooseFolder { model.outputFolder = $0 } }
+            if let folder = model.outputFolder {
+                Divider()
+                Button("Show \(folder.lastPathComponent) in Finder") { NSWorkspace.shared.open(folder) }
+            }
+        } label: {
+            Label(model.outputFolder?.lastPathComponent ?? "Next to Originals", systemImage: "folder")
+                .labelStyle(.titleAndIcon)
+        }
+        .help("Where converted files go.")
+        .accessibilityLabel("Destination")
+        .accessibilityValue(model.outputFolder?.lastPathComponent ?? "Next to originals")
+    }
+}
+
+/// EngineToggle turns the Apple media engine on and off and shows which encoder will run.
+struct EngineToggle: View {
+    /// model is the window state.
+    @Bindable var model: Converter
+
+    var body: some View {
+        Toggle(isOn: $model.hardware) {
+            Label(model.hasHardware ? "Media Engine" : "Software",
+                  systemImage: model.hasHardware && model.hardware ? "bolt.fill" : "cpu")
+                .labelStyle(.titleAndIcon)
+        }
+        .toggleStyle(.button)
+        .disabled(!model.hasHardware || blocked)
+        .help(help)
+        .accessibilityLabel("Use Media Engine")
+    }
+
+    /// blocked is true when the window settings cannot use the media engine.
+    private var blocked: Bool {
+        model.settings?.needsSize == true || model.settings?.isAudioOnly == true
+    }
+
+    /// help explains the current encoder choice.
+    private var help: String {
+        if model.encoders.isEmpty { return "Waiting for the converter." }
+        if !model.hasHardware { return "No media engine encoder in this ffmpeg build. Encoding runs in software." }
+        if model.settings?.needsSize == true { return "Size targeting uses two software passes for accuracy." }
+        if model.settings?.isAudioOnly == true { return "Audio encodes in software." }
+        return model.hardware ? "Encoding on the Apple media engine. Falls back to software if it fails."
+            : "Encoding in software. Turn on to use the Apple media engine."
+    }
+}
+
+/// BottomBar summarizes the run and holds Convert.
+struct BottomBar: View {
+    /// model is the window state.
+    @Bindable var model: Converter
+
+    var body: some View {
         HStack(spacing: 12) {
             summary
             Spacer()
-            Button("Add Files…") { MediaFiles.choose { model.add(urls: $0) } }
-                .buttonStyle(.bordered)
             if model.hasFinished {
                 Button("Clear Finished") { model.clearFinished() }
                     .buttonStyle(.bordered)
+                    .help("Remove finished files from the list.")
             }
             Button {
                 model.convertAll()
@@ -116,12 +158,11 @@ struct ContentView: View {
             .keyboardShortcut(.return, modifiers: .command)
         }
         .controlSize(.large)
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
-        .background(Theme.background.opacity(0.6))
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
     }
 
-    /// summary shows overall progress while busy, then the space saved.
+    /// summary shows overall progress while busy, then the space saved, else what is ready.
     @ViewBuilder private var summary: some View {
         if let progress = model.overallProgress {
             HStack(spacing: 10) {
@@ -131,9 +172,8 @@ struct ContentView: View {
         } else if model.savedBytes > 0 {
             Label("Saved \(Format.bytes(model.savedBytes))", systemImage: "leaf.fill")
                 .foregroundStyle(Theme.success)
-        } else if let version = model.version {
-            Text("icelos \(version) · Free and open source · No account, no upsells")
-                .font(.caption)
+        } else if model.pendingCount > 0 {
+            Text(model.pendingCount == 1 ? "1 file ready" : "\(model.pendingCount) files ready")
                 .foregroundStyle(Theme.muted)
         }
     }
@@ -149,47 +189,11 @@ struct FaultBanner: View {
             .font(.callout)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Theme.danger.opacity(0.18)))
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.danger.opacity(0.18)))
             .foregroundStyle(Theme.danger)
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
             .textSelection(.enabled)
-    }
-}
-
-/// OptionsBar holds the settings that apply to the next Convert.
-struct OptionsBar: View {
-    /// model is the window state.
-    @Bindable var model: Converter
-
-    var body: some View {
-        HStack(spacing: 18) {
-            if model.settings?.needsSize == true {
-                HStack(spacing: 6) {
-                    Text("Fit under")
-                    TextField("25MB", text: $model.targetSize)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 90)
-                }
-            }
-            if model.settings?.isAudioOnly == false {
-                Toggle("Use Media Engine", isOn: $model.hardware)
-                    .disabled(!model.hasHardware || model.settings?.needsSize == true)
-                    .help(model.settings?.needsSize == true
-                          ? "Size targeting uses two software passes for accuracy."
-                          : "Encode on the Apple media engine. Falls back to software if it fails.")
-            }
-            Spacer()
-            Menu {
-                Button("Next to Originals") { model.outputFolder = nil }
-                Button("Choose Folder…") { MediaFiles.chooseFolder { model.outputFolder = $0 } }
-            } label: {
-                Label(model.outputFolder?.lastPathComponent ?? "Next to originals", systemImage: "folder")
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .help("Where converted files go.")
-        }
-        .font(.callout)
     }
 }
 
@@ -201,14 +205,14 @@ struct DropZone: View {
     let choose: () -> Void
 
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "square.and.arrow.down.on.square")
-                .font(.system(size: 44, weight: .light))
-                .foregroundStyle(Theme.accent)
-                .symbolEffect(.bounce, value: targeted)
+        VStack(spacing: 12) {
+            Image(nsImage: NSApplication.shared.applicationIconImage)
+                .resizable()
+                .frame(width: 96, height: 96)
+                .accessibilityHidden(true)
             Text("Drop videos or music here")
                 .font(.title3.weight(.medium))
-            Text("Folders work too. Nothing leaves your Mac.")
+            Text("Form is never final.")
                 .foregroundStyle(Theme.muted)
             Button("Choose Files…", action: choose)
                 .buttonStyle(.bordered)
@@ -217,22 +221,11 @@ struct DropZone: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
-            RoundedRectangle(cornerRadius: 18)
+            RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [7, 6]))
-                .foregroundStyle(targeted ? Theme.accent : Theme.text.opacity(0.18))
-                .background(RoundedRectangle(cornerRadius: 18).fill(Theme.accent.opacity(targeted ? 0.08 : 0)))
+                .foregroundStyle(targeted ? Theme.accent : Theme.border)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Theme.accent.opacity(targeted ? 0.08 : 0)))
         }
         .animation(.easeOut(duration: 0.2), value: targeted)
     }
-}
-
-/// Editing names what a settings sheet edits.
-enum Editing: Identifiable, Hashable {
-    /// window edits the settings for every file without an override.
-    case window
-    /// item edits the override for one file.
-    case item(UUID)
-
-    /// id identifies the sheet.
-    var id: Self { self }
 }

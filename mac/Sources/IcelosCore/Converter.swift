@@ -91,6 +91,10 @@ public final class Converter {
     public var settings: Preset?
     /// presetError is the latest problem saving, deleting, or reading custom presets.
     public private(set) var presetError: String?
+    /// recent lists the preset IDs used last, newest first.
+    public private(set) var recent: [String] = []
+    /// selection is the selected file, whose override the inspector edits when it has one.
+    public var selection: UUID?
     /// hardware prefers the media engine.
     public var hardware = true
     /// targetSize is the size for the target-size preset.
@@ -136,6 +140,75 @@ public final class Converter {
     public var isEdited: Bool {
         guard let settings else { return false }
         return preset(id: presetID) != settings
+    }
+
+    /// selectedTargetID is the sidebar row the settings came from.
+    public var selectedTargetID: String? {
+        Targets.selectedID(presetID: presetID, container: settings?.container)
+    }
+
+    /// targetSections are the sidebar sections filtered by search.
+    public func targetSections(search: String = "") -> [TargetSection] {
+        Targets.sections(presets: presets, recent: recent, catalog: catalog, search: search)
+    }
+
+    /// choose makes a sidebar target the window settings. Unavailable formats are ignored.
+    public func choose(_ pick: Target.Pick) {
+        switch pick {
+        case .preset(let id):
+            guard preset(id: id) != nil else { return }
+            if presetID == id, let p = preset(id: id) { settings = p } else { presetID = id }
+        case .container(let id):
+            guard let catalog, let c = catalog.container(id: id), catalog.isUsable(c) else { return }
+            select(container: c)
+        }
+    }
+
+    /// inspectorScope is what the inspector edits: the window settings, or the selected pending
+    /// file, which either follows the window settings or has its own.
+    public var inspectorScope: InspectorScope {
+        guard let id = selection, let item = items.first(where: { $0.id == id }), item.phase == .pending,
+              item.probeError == nil else { return .window }
+        return .item(id, name: item.url.lastPathComponent, usesWindow: item.settings == nil)
+    }
+
+    /// inspected is the settings the inspector shows.
+    public var inspected: Preset? {
+        if case .item(let id, _, false) = inspectorScope {
+            return items.first { $0.id == id }?.settings
+        }
+        return settings
+    }
+
+    /// inspectedOriginal is what the inspector's Reset goes back to: the window settings for a
+    /// file's own settings, else the selected preset or the format's starting settings.
+    public var inspectedOriginal: Preset? {
+        if case .item(_, _, false) = inspectorScope { return settings }
+        guard let base = settings else { return nil }
+        if let p = preset(id: presetID) { return p }
+        guard let catalog, let c = catalog.container(id: base.container) else { return base }
+        return catalog.target(for: c)
+    }
+
+    /// editInspected applies an inspector edit to the selected file's own settings when it has
+    /// them, else to the window settings. A file's own settings stay its own even when they come
+    /// to match the window settings, so the switch does not flip under the user.
+    public func editInspected(_ p: Preset) {
+        if case .item(let id, _, false) = inspectorScope {
+            update(id) { $0.settings = p }
+        } else {
+            settings = p
+        }
+    }
+
+    /// setUsesWindowSettings makes a pending file follow the window settings, or gives it its own
+    /// copy of them to edit.
+    public func setUsesWindowSettings(_ id: UUID, _ on: Bool) {
+        let base = settings
+        update(id) { item in
+            guard item.phase == .pending else { return }
+            item.settings = on ? nil : (item.settings ?? base)
+        }
     }
 
     /// hasHardware is true when a VideoToolbox encoder is available.
@@ -269,17 +342,36 @@ public final class Converter {
               items[i].probeError == nil else { return }
         let old = items[i]
         items[i] = Item(id: UUID(), url: old.url, info: old.info, settings: old.settings)
+        if selection == id { selection = items[i].id }
     }
 
     /// remove drops an item that is not queued or running.
     public func remove(_ id: UUID) {
         items.removeAll { $0.id == id && !($0.phase == .queued || $0.phase == .running) }
+        clearStaleSelection()
+    }
+
+    /// canRemoveSelection is true when a file is selected and not queued or running.
+    public var canRemoveSelection: Bool {
+        guard let id = selection, let item = items.first(where: { $0.id == id }) else { return false }
+        return !(item.phase == .queued || item.phase == .running)
+    }
+
+    /// removeSelection drops the selected file when it is not queued or running.
+    public func removeSelection() {
+        if let id = selection { remove(id) }
     }
 
     /// clearFinished drops finished items here and in the converter.
     public func clearFinished() {
         items.removeAll { $0.phase.isFinished }
+        clearStaleSelection()
         send(Request(id: "clear", op: "clear"))
+    }
+
+    /// clearStaleSelection drops a selection whose file is gone.
+    private func clearStaleSelection() {
+        if let id = selection, !items.contains(where: { $0.id == id }) { selection = nil }
     }
 
     /// backendExited records that the converter stopped and fails everything in flight.
@@ -337,6 +429,7 @@ public final class Converter {
     /// that is gone falls back to the first preset; edited settings are left alone otherwise.
     private func applyPresets(_ m: Message) {
         presets = m.presets ?? []
+        recent = m.recent ?? recent
         presetError = m.warning
         if m.type == "preset.save", let id = savingID {
             savingID = nil
@@ -369,4 +462,13 @@ public final class Converter {
         guard let reply, let colon = reply.firstIndex(of: ":") else { return (reply ?? "", nil) }
         return (String(reply[..<colon]), UUID(uuidString: String(reply[reply.index(after: colon)...])))
     }
+}
+
+/// InspectorScope is what the inspector edits.
+public enum InspectorScope: Equatable, Sendable {
+    /// window edits the settings for every file without its own.
+    case window
+    /// item is the selected pending file, named name, which follows the window settings when
+    /// usesWindow is true.
+    case item(UUID, name: String, usesWindow: Bool)
 }

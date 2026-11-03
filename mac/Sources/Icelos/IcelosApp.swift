@@ -15,7 +15,7 @@ struct IcelosApp: App {
 
     var body: some Scene {
         Window("Icelos", id: "main") {
-            ContentView(model: session.model)
+            ContentView(model: session.model, window: session.window)
                 .frame(minWidth: 780, minHeight: 560)
                 .themed()
                 .onAppear { session.start() }
@@ -23,12 +23,23 @@ struct IcelosApp: App {
                     session.stop()
                 }
         }
-        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unified(showsTitle: false))
         .defaultSize(width: 920, height: 680)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Add Files…") { MediaFiles.choose { session.model.add(urls: $0) } }
                     .keyboardShortcut("o")
+            }
+            CommandGroup(replacing: .textEditing) {
+                Button("Search Formats") { session.window.searching = true }
+                    .keyboardShortcut("f")
+            }
+            SidebarCommands()
+            CommandGroup(after: .sidebar) {
+                Button(session.window.showsInspector ? "Hide Inspector" : "Show Inspector") {
+                    session.window.showsInspector.toggle()
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
             }
             CommandMenu("Convert") {
                 Button("Convert") { session.model.convertAll() }
@@ -37,6 +48,10 @@ struct IcelosApp: App {
                 Button("Clear Finished") { session.model.clearFinished() }
                     .keyboardShortcut("k")
                     .disabled(!session.model.hasFinished)
+                Divider()
+                Button("Remove from List") { session.model.removeSelection() }
+                    .keyboardShortcut(.delete)
+                    .disabled(!session.model.canRemoveSelection)
             }
         }
         Settings {
@@ -51,6 +66,8 @@ struct IcelosApp: App {
 final class Session {
     /// model is the window state.
     let model: Converter
+    /// window is the view-only window state the menu commands reach.
+    let window = WindowState()
     /// backend is the converter process, or nil when the binary is missing.
     @ObservationIgnored private let backend: Backend?
 
@@ -86,4 +103,16 @@ final class Session {
     func stop() {
         backend?.stop()
     }
+}
+
+/// WindowState holds the view-only state of the window that menu commands also change.
+@MainActor
+@Observable
+final class WindowState {
+    /// showsInspector is true while the settings inspector is open.
+    var showsInspector = true
+    /// search filters the sidebar targets.
+    var search = ""
+    /// searching is true while the sidebar search field has focus.
+    var searching = false
 }
