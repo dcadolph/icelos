@@ -193,6 +193,7 @@ func TestProbeAndEncoders(t *testing.T) { //nolint:paralleltest // Flags are pro
 }
 
 func TestServe(t *testing.T) { //nolint:paralleltest // Flags are process-wide.
+	t.Setenv("HOME", t.TempDir())
 	out, err := testRun(t, `{"id":"1","op":"presets"}`+"\n", "serve")
 	if err != nil {
 		t.Fatal(err)

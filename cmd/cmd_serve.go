@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/dcadolph/icelos/cmd/config"
+	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/serve"
 )
 
@@ -18,8 +19,13 @@ and exits.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			enc, prober := newEngine()
+			store, err := preset.NewStore()
+			if err != nil {
+				return err
+			}
 			srv := serve.New(cmd.OutOrStdout(), serve.Config{Encoder: enc, Prober: prober,
-				Encoders: enc.Encoders, Version: resolveVersion(), Workers: config.Workers()})
+				Encoders: enc.Encoders, Presets: store, Version: resolveVersion(),
+				Workers: config.Workers()})
 			return srv.Run(cmd.Context(), cmd.InOrStdin())
 		},
 	}

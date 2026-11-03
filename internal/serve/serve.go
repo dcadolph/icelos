@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -30,8 +31,12 @@ const (
 	OpCapabilities = "capabilities"
 	// OpCatalog asks for the containers, the codecs this ffmpeg can encode, and the option lists.
 	OpCatalog = "catalog"
-	// OpPresets asks for the built-in presets.
+	// OpPresets asks for the built-in and custom presets and the recently used IDs.
 	OpPresets = "presets"
+	// OpPresetSave saves Request.PresetBody as a custom preset and answers like presets.
+	OpPresetSave = "preset.save"
+	// OpPresetDelete deletes the custom preset Request.Preset and answers like presets.
+	OpPresetDelete = "preset.delete"
 	// OpProbe asks for the metadata of Request.Path.
 	OpProbe = "probe"
 	// OpAdd queues a conversion.
@@ -66,10 +71,10 @@ type Request struct {
 	Path string `json:"path,omitempty"`
 	// Input is the file to convert.
 	Input string `json:"input,omitempty"`
-	// Preset is the preset ID for add.
+	// Preset is the preset ID for add and preset.delete.
 	Preset string `json:"preset,omitempty"`
-	// PresetBody is a whole preset for add, used instead of Preset when set, so a file can carry
-	// settings that no saved preset holds.
+	// PresetBody is a whole preset. For add it is used instead of Preset, so a file can carry
+	// settings that no saved preset holds. For preset.save it is the preset to save.
 	PresetBody *preset.Preset `json:"presetBody,omitempty"`
 	// Size is the target size for the target-size preset, e.g. "25MB".
 	Size string `json:"size,omitempty"`
@@ -97,8 +102,13 @@ type Message struct {
 	Version string `json:"version,omitempty"`
 	// Encoders lists the ffmpeg encoders icelos can use.
 	Encoders []string `json:"encoders,omitempty"`
-	// Presets lists the built-in presets.
+	// Presets lists the built-in presets followed by the custom ones.
 	Presets []preset.Preset `json:"presets,omitempty"`
+	// Recent lists the IDs of the presets used most recently, newest first.
+	Recent []string `json:"recent,omitempty"`
+	// Warning reports a problem that did not stop the request, such as an unreadable custom
+	// preset file.
+	Warning string `json:"warning,omitempty"`
 	// Catalog is the format catalog with codec availability.
 	Catalog *Catalog `json:"catalog,omitempty"`
 	// Info is the probe result.
@@ -148,6 +158,8 @@ type Config struct {
 	Prober engine.Prober
 	// Encoders lists the available encoders.
 	Encoders EncodersFunc
+	// Presets holds the custom presets and the recent list.
+	Presets *preset.Store
 	// Version is reported in the ready and capabilities messages.
 	Version string
 	// Workers is how many jobs run at once. Zero means one.
@@ -173,8 +185,8 @@ func New(w io.Writer, cfg Config) *Server {
 	if w == nil {
 		panic("serve.New: writer required")
 	}
-	if cfg.Encoder == nil || cfg.Prober == nil || cfg.Encoders == nil {
-		panic("serve.New: Encoder, Prober, and Encoders required")
+	if cfg.Encoder == nil || cfg.Prober == nil || cfg.Encoders == nil || cfg.Presets == nil {
+		panic("serve.New: Encoder, Prober, Encoders, and Presets required")
 	}
 	s := &Server{cfg: cfg, out: json.NewEncoder(w)}
 	s.q = queue.WithWorkers(cfg.Encoder, max(1, cfg.Workers), func(st queue.Status) {
@@ -248,7 +260,23 @@ func (s *Server) handle(ctx context.Context, req Request, wg *sync.WaitGroup) {
 			s.send(Message{Type: req.Op, Reply: req.ID, Catalog: &c})
 		}()
 	case OpPresets:
-		s.send(Message{Type: req.Op, Reply: req.ID, Presets: preset.All()})
+		s.send(s.presets(req))
+	case OpPresetSave:
+		if req.PresetBody == nil {
+			s.fail(req.ID, fmt.Errorf("%w: presetBody required", ErrRequest))
+			return
+		}
+		if err := s.cfg.Presets.Save(*req.PresetBody); err != nil {
+			s.fail(req.ID, err)
+			return
+		}
+		s.send(s.presets(req))
+	case OpPresetDelete:
+		if err := s.cfg.Presets.Delete(req.Preset); err != nil {
+			s.fail(req.ID, err)
+			return
+		}
+		s.send(s.presets(req))
 	case OpProbe:
 		wg.Add(1)
 		go func() {
@@ -261,7 +289,7 @@ func (s *Server) handle(ctx context.Context, req Request, wg *sync.WaitGroup) {
 			s.send(Message{Type: req.Op, Reply: req.ID, Info: &info})
 		}()
 	case OpAdd:
-		job, err := jobFor(req)
+		job, err := s.jobFor(req)
 		if err != nil {
 			s.fail(req.ID, err)
 			return
@@ -271,7 +299,13 @@ func (s *Server) handle(ctx context.Context, req Request, wg *sync.WaitGroup) {
 			s.fail(req.ID, err)
 			return
 		}
-		s.send(Message{Type: req.Op, Reply: req.ID, Status: &st})
+		m := Message{Type: req.Op, Reply: req.ID, Status: &st}
+		if req.PresetBody == nil {
+			if err := s.cfg.Presets.Use(job.Preset.ID); err != nil {
+				m.Warning = err.Error()
+			}
+		}
+		s.send(m)
 	case OpCancel:
 		if err := s.q.Cancel(req.Job); err != nil {
 			s.fail(req.ID, err)
@@ -288,12 +322,26 @@ func (s *Server) handle(ctx context.Context, req Request, wg *sync.WaitGroup) {
 	}
 }
 
+// presets answers req with the built-in and custom presets and the recent list. A custom preset
+// file that cannot be read becomes a warning, so the rest still reach the app.
+func (s *Server) presets(req Request) Message {
+	m := Message{Type: req.Op, Reply: req.ID, Presets: preset.All()}
+	custom, listErr := s.cfg.Presets.List()
+	m.Presets = append(m.Presets, custom...)
+	recent, recentErr := s.cfg.Presets.Recent()
+	m.Recent = recent
+	if err := errors.Join(listErr, recentErr); err != nil {
+		m.Warning = strings.ReplaceAll(err.Error(), "\n", "; ")
+	}
+	return m
+}
+
 // jobFor builds the engine job an add request describes.
-func jobFor(req Request) (engine.Job, error) {
+func (s *Server) jobFor(req Request) (engine.Job, error) {
 	if req.Input == "" {
 		return engine.Job{}, fmt.Errorf("%w: input required", ErrRequest)
 	}
-	p, err := presetFor(req)
+	p, err := s.presetFor(req)
 	if err != nil {
 		return engine.Job{}, err
 	}
@@ -312,10 +360,11 @@ func jobFor(req Request) (engine.Job, error) {
 		Overwrite: req.Overwrite}, nil
 }
 
-// presetFor returns the inline preset of an add request after validating it, or the named one.
-func presetFor(req Request) (preset.Preset, error) {
+// presetFor returns the inline preset of an add request after validating it, or else the named
+// built-in or custom one.
+func (s *Server) presetFor(req Request) (preset.Preset, error) {
 	if req.PresetBody == nil {
-		return preset.Lookup(req.Preset)
+		return s.cfg.Presets.Lookup(req.Preset)
 	}
 	if err := req.PresetBody.Validate(); err != nil {
 		return preset.Preset{}, err

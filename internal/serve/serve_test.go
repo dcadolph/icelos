@@ -19,6 +19,7 @@ import (
 
 	"github.com/dcadolph/icelos/internal/engine"
 	"github.com/dcadolph/icelos/internal/format"
+	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/probe"
 	"github.com/dcadolph/icelos/internal/queue"
 )
@@ -55,8 +56,15 @@ func (o *testOutput) Messages(t *testing.T) []Message {
 	return out
 }
 
-// testSession starts a server with a fake encoder and returns its input and output.
+// testSession starts a server with a fake encoder and a store in a temporary folder, and
+// returns its input and output.
 func testSession(t *testing.T) (*io.PipeWriter, *testOutput, <-chan error) {
+	t.Helper()
+	return testSessionWith(t, preset.WithDir(t.TempDir()))
+}
+
+// testSessionWith starts a server with a fake encoder and the given preset store.
+func testSessionWith(t *testing.T, store *preset.Store) (*io.PipeWriter, *testOutput, <-chan error) {
 	t.Helper()
 	enc := engine.EncoderFunc(func(ctx context.Context, job engine.Job, report engine.ReportFunc) error {
 		report(engine.Progress{Percent: 0.5, Pass: 1, Passes: 1})
@@ -64,7 +72,7 @@ func testSession(t *testing.T) (*io.PipeWriter, *testOutput, <-chan error) {
 			<-ctx.Done()
 			return ctx.Err()
 		}
-		return nil
+		return os.WriteFile(job.Output, nil, 0o600)
 	})
 	prober := engine.ProberFunc(func(_ context.Context, path string) (probe.Info, error) {
 		if strings.HasSuffix(path, "missing.mov") {
@@ -76,7 +84,8 @@ func testSession(t *testing.T) (*io.PipeWriter, *testOutput, <-chan error) {
 		return engine.EncoderSet{"libx264": true, "hevc_videotoolbox": true, "png": true}, nil
 	}
 	out := &testOutput{}
-	srv := New(out, Config{Encoder: enc, Prober: prober, Encoders: encoders, Version: "v0.0.0-test"})
+	srv := New(out, Config{Encoder: enc, Prober: prober, Encoders: encoders, Presets: store,
+		Version: "v0.0.0-test"})
 	pr, pw := io.Pipe()
 	done := make(chan error, 1)
 	go func() { done <- srv.Run(t.Context(), pr) }()
@@ -265,7 +274,7 @@ func TestWriteError(t *testing.T) {
 	t.Parallel()
 	enc := engine.EncoderFunc(func(context.Context, engine.Job, engine.ReportFunc) error { return nil })
 	prober := engine.ProberFunc(func(context.Context, string) (probe.Info, error) { return probe.Info{}, nil })
-	srv := New(testFailWriter{}, Config{Encoder: enc, Prober: prober,
+	srv := New(testFailWriter{}, Config{Encoder: enc, Prober: prober, Presets: preset.WithDir(t.TempDir()),
 		Encoders: func(context.Context) (engine.EncoderSet, error) { return nil, nil }})
 	if err := srv.Run(t.Context(), strings.NewReader(`{"op":"presets"}`)); !errors.Is(err, ErrWrite) {
 		t.Errorf("error = %v, want %v", err, ErrWrite)
@@ -348,5 +357,83 @@ func TestCatalogFitsOneLine(t *testing.T) {
 	}
 	if diff := cmp.Diff(c, *back.Catalog); diff != "" {
 		t.Errorf("round trip mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCustomPresets(t *testing.T) { //nolint:funlen // Test function.
+	t.Parallel()
+	dir := t.TempDir()
+	clip := filepath.Join(dir, "clip.mov")
+	if err := os.WriteFile(clip, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	storeDir := filepath.Join(dir, "presets")
+	in, out, done := testSessionWith(t, preset.WithDir(storeDir))
+	body := `{"id":"mine","name":"Mine","container":"mkv","video":{"codec":"hevc","rateControl":"quality",` +
+		`"quality":1},"audio":{"codec":"opus","bitrate":128000}}`
+	testSend(t, in,
+		`{"id":"s0","op":"preset.save","presetBody":`+body+`}`,
+		`{"id":"s1","op":"preset.save","presetBody":{"id":"apple","name":"Mine","container":"mp4",`+
+			`"video":{"codec":"h264"}}}`,
+		`{"id":"s2","op":"preset.save"}`,
+		`{"id":"a0","op":"add","input":"`+clip+`","preset":"mine"}`,
+		`{"id":"a1","op":"add","input":"`+clip+`","preset":"web"}`,
+		`{"id":"p0","op":"presets"}`,
+	)
+	tests := []struct {
+		Reply     string
+		WantType  string
+		WantError string
+	}{
+		{Reply: "s0", WantType: OpPresetSave},                                             // Test 0: Saved.
+		{Reply: "s1", WantType: TypeError, WantError: `built-in preset: "apple"`},         // Test 1: Built-in ID.
+		{Reply: "s2", WantType: TypeError, WantError: "bad request: presetBody required"}, // Test 2: No body.
+		{Reply: "a0", WantType: OpAdd},                                                    // Test 3: Add by custom ID.
+		{Reply: "a1", WantType: OpAdd},                                                    // Test 4: Add by built-in ID.
+		{Reply: "p0", WantType: OpPresets},                                                // Test 5: Presets.
+	}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			got := waitFor(t, out, byReply(test.Reply))
+			if diff := cmp.Diff([2]string{test.WantType, test.WantError}, [2]string{got.Type, got.Error}); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+	saved := waitFor(t, out, byReply("s0"))
+	if last := saved.Presets[len(saved.Presets)-1]; last.ID != "mine" || !last.Custom {
+		t.Errorf("saved reply ends with %s custom=%v", last.ID, last.Custom)
+	}
+	if a := waitFor(t, out, byReply("a0")); a.Status.Job.Preset.ID != "mine" || a.Warning != "" {
+		t.Errorf("custom add = %+v warning %q", a.Status.Job.Preset, a.Warning)
+	}
+	p := waitFor(t, out, byReply("p0"))
+	if diff := cmp.Diff([]string{"web", "mine"}, p.Recent); diff != "" {
+		t.Errorf("recent mismatch (-want +got):\n%s", diff)
+	}
+	if len(p.Presets) != len(preset.All())+1 || p.Warning != "" {
+		t.Errorf("presets = %d, warning %q", len(p.Presets), p.Warning)
+	}
+
+	if err := os.WriteFile(filepath.Join(storeDir, "broken.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	testSend(t, in, `{"id":"d0","op":"preset.delete","preset":"mine"}`,
+		`{"id":"d1","op":"preset.delete","preset":"mine"}`)
+	d := waitFor(t, out, byReply("d0"))
+	if d.Type != OpPresetDelete || len(d.Presets) != len(preset.All()) || !strings.Contains(d.Warning, "broken.json") {
+		t.Errorf("delete reply = %s, %d presets, warning %q", d.Type, len(d.Presets), d.Warning)
+	}
+	if diff := cmp.Diff([]string{"web"}, d.Recent); diff != "" {
+		t.Errorf("recent after delete mismatch (-want +got):\n%s", diff)
+	}
+	if d1 := waitFor(t, out, byReply("d1")); d1.Error != `unknown preset: "mine"` {
+		t.Errorf("second delete = %+v", d1)
+	}
+	if err := in.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Errorf("Run = %v", err)
 	}
 }

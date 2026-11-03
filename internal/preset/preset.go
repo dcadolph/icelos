@@ -19,6 +19,8 @@ type Preset struct {
 	Description string `json:"description"`
 	// Target is the container and the stream settings, flattened into the preset's JSON.
 	format.Target
+	// Custom is true for presets the user saved, as opposed to built-in ones.
+	Custom bool `json:"custom,omitempty"`
 }
 
 // MarshalJSON encodes p with its derived file extension, so clients can show it without the
