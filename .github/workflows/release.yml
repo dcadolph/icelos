@@ -4,6 +4,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Attach the Mac app to the release named by the ref (a tag ref only).
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -14,6 +19,8 @@ permissions:
 
 jobs:
   goreleaser:
+    # A dispatch run without a tag proves the Mac chain only; goreleaser needs a tag.
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -85,3 +92,250 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "$GITHUB_REF_NAME" --title "${{ steps.title.outputs.name }}"
+
+  # FFmpeg for the app, built natively per architecture from the pinned recipe and cached on
+  # the recipe's hash, so an unchanged recipe costs a cache restore.
+  ffmpeg:
+    strategy:
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: brew install cmake nasm meson ninja pkg-config autoconf automake
+      - uses: actions/cache@v6
+        with:
+          path: |
+            mac/.build/ffmpeg/${{ matrix.arch }}
+            mac/.build/ffmpeg/src
+          key: ffmpeg-${{ matrix.arch }}-${{ hashFiles('mac/build-ffmpeg.sh', 'mac/ffmpeg-sources.txt') }}
+          # A recipe change restores the last build and rebuilds only what its markers say changed.
+          restore-keys: ffmpeg-${{ matrix.arch }}-
+      - name: Build FFmpeg
+        run: mac/build-ffmpeg.sh "${{ matrix.arch }}"
+      - name: Keep the build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-logs-${{ matrix.arch }}
+          path: mac/.build/ffmpeg/logs-${{ matrix.arch }}/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-${{ matrix.arch }}
+          path: mac/.build/ffmpeg/${{ matrix.arch }}/bin/
+          if-no-files-found: error
+
+  # The signed, notarized universal app with FFmpeg inside, as a DMG and a zip.
+  mac:
+    needs: ffmpeg
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require signing secrets
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          for name in MACOS_CERT_P12 MACOS_CERT_PASSWORD NOTARY_KEY_P8 NOTARY_KEY_ID NOTARY_ISSUER_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Secret $name is not set. The app must be signed and notarized."
+              exit 1
+            fi
+          done
+      - name: Import the signing certificate
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          keychain_password="$(uuidgen)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$keychain" -P "$MACOS_CERT_PASSWORD" \
+            -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain-db
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v8
+        with:
+          name: ffmpeg-arm64
+          path: mac/.build/ffmpeg/arm64/bin
+      - uses: actions/download-artifact@v8
+        with:
+          name: ffmpeg-x86_64
+          path: mac/.build/ffmpeg/x86_64/bin
+      - name: Restore execute bits
+        run: chmod +x mac/.build/ffmpeg/*/bin/*
+      - name: Build, sign, notarize, and verify
+        id: release
+        env:
+          NOTARY_KEY_P8: ${{ secrets.NOTARY_KEY_P8 }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="0.0.0-dev.$GITHUB_RUN_NUMBER"
+          fi
+          mac/release.sh "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Require the team on the disk image
+        run: |
+          set -euo pipefail
+          codesign -dv dist/Icelos_v${{ steps.release.outputs.version }}_macos_universal.dmg 2>&1 |
+            grep '^TeamIdentifier=U7L4P2YHWJ$'
+
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      # Same signing and self-check as the command line checksums, pinned to this run's ref.
+      - name: Sign the Mac checksums
+        env:
+          IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
+        run: |
+          set -euo pipefail
+          cd dist
+          for i in 1 2 3; do
+            if cosign sign-blob --yes checksums-macos.txt \
+                --output-signature checksums-macos.txt.sig \
+                --output-certificate checksums-macos.txt.pem; then
+              break
+            fi
+            if [ "$i" = 3 ]; then exit 1; fi
+            sleep 15
+          done
+          cosign verify-blob checksums-macos.txt \
+            --signature checksums-macos.txt.sig \
+            --certificate checksums-macos.txt.pem \
+            --certificate-identity "$IDENTITY" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          shasum -a 256 -c checksums-macos.txt
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.tar
+
+      - name: Keep the build on the run
+        uses: actions/upload-artifact@v7
+        with:
+          name: icelos-macos
+          path: dist/
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != refs/tags/* ]]; then
+            echo "::error::publish needs a tag ref; $GITHUB_REF has no release."
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" dist/Icelos_* dist/checksums-macos.txt* --clobber
+
+      - name: Remove the signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+
+  tap:
+    needs: mac
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ github.ref_name }}
+      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Write the cask into the tap
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "::error::HOMEBREW_TAP_TOKEN is not set on this repository"
+            exit 1
+          fi
+          VER="${TAG#v}"
+          zip="Icelos_${TAG}_macos_universal.zip"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$zip"
+          sha="$(sha256sum "$zip" | cut -d' ' -f1)"
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/dcadolph/homebrew-tap.git" tap
+          cat > tap/Casks/icelos.rb <<EOF
+          cask "icelos" do
+            version "${VER}"
+            sha256 "${sha}"
+
+            url "https://github.com/dcadolph/icelos/releases/download/v#{version}/Icelos_v#{version}_macos_universal.zip"
+            name "Icelos"
+            desc "Media converter"
+            homepage "https://github.com/dcadolph/icelos"
+
+            livecheck do
+              url :url
+              strategy :github_latest
+            end
+
+            depends_on macos: :sonoma
+
+            app "Icelos.app"
+
+            zap trash: [
+              "~/Library/Application Support/icelos",
+              "~/Library/Preferences/com.dcadolph.icelos.plist",
+            ]
+          end
+          EOF
+          cd tap
+          git config user.name "dcadolph"
+          git config user.email "116844282+dcadolph@users.noreply.github.com"
+          git add Casks/icelos.rb
+          # A re-run of a tag that already shipped writes the same cask and has nothing to push.
+          if git diff --cached --quiet; then
+            echo "the cask already holds ${VER}; nothing to bump"
+            exit 0
+          fi
+          git commit -m "Update icelos to ${VER}"
+          git push
+
+  verify:
+    needs: tap
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: macos-15
+    steps:
+      - name: Install from the tap and check it as a user would
+        env:
+          # The online audit calls the GitHub API, which rate limits shared runners without a token.
+          HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          brew tap dcadolph/tap
+          brew install --cask dcadolph/tap/icelos
+          spctl --assess --type execute --verbose=4 /Applications/Icelos.app
+          # Apple's ticket service drops connections now and then, so retry before failing.
+          for try in 1 2 3; do
+            xcrun stapler validate /Applications/Icelos.app && break
+            test "$try" -lt 3
+            sleep 20
+          done
+          /Applications/Icelos.app/Contents/Helpers/icelos encoders | grep -q '"ffmpeg":"/Applications/Icelos.app/Contents/Helpers/ffmpeg"'
+          brew audit --cask --strict --online dcadolph/tap/icelos
+          brew uninstall --cask icelos
