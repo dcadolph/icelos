@@ -14,46 +14,115 @@ public enum Estimate {
     /// areaExponent bends the size change of a resize: half the pixels costs more than half the
     /// bits.
     static let areaExponent = 0.75
-    /// ratios are output against source video bitrate for the quality rate control, keyed by
-    /// codec ID and indexed by quality level less one.
-    static let ratios: [String: [Double]] = {
-        let h264 = [0.55, 0.35, 0.2]
+    /// spread widens a quality range by this share on each side for what the ratio model leaves
+    /// out: audio and container cost above the nominal bitrate and encoder variance, which put the
+    /// calibration presets up to 8% outside the bare ratios.
+    static let spread = 0.1
+    /// ratios bound output against source video bitrate for the quality rate control, keyed by
+    /// engine and codec ID and indexed by quality level less one. Measured 2026-11-03 on two 20 s
+    /// fixtures from the wolf-eye-bird clip, one clean at 4.7 Mb/s and one with temporal grain at
+    /// 17.4 Mb/s: each bound is the smaller or larger of the two. AV1 and VP9 are not measured yet
+    /// and take 0.7 and 0.8 of software H.264.
+    static let ratios: [Engine: [String: [Ratio]]] = {
+        let h264 = [Ratio(0.1128, 0.5134), Ratio(0.0876, 0.1587), Ratio(0.0523, 0.0650)]
         return [
-            "h264": h264,
-            "hevc": h264.map { $0 * 0.7 },
-            "av1": h264.map { $0 * 0.7 },
-            "vp9": h264.map { $0 * 0.8 },
+            .software: [
+                "h264": h264,
+                "hevc": [Ratio(0.0400, 0.1080), Ratio(0.0173, 0.0701), Ratio(0.0121, 0.0527)],
+                "av1": h264.map { $0.scaled(0.7) },
+                "vp9": h264.map { $0.scaled(0.8) },
+            ],
+            .hardware: [
+                "h264": [Ratio(0.1741, 0.4687), Ratio(0.0517, 0.1112), Ratio(0.0257, 0.0909)],
+                "hevc": [Ratio(0.0454, 0.1107), Ratio(0.0232, 0.0777), Ratio(0.0135, 0.0506)],
+            ],
         ]
     }()
+
+    /// Range is an expected output size. A point estimate has low equal to high.
+    public struct Range: Equatable, Sendable {
+        /// low is the smallest expected size in bytes.
+        public var low: Int64
+        /// high is the largest expected size in bytes.
+        public var high: Int64
+
+        /// Creates a range from low to high.
+        public init(low: Int64, high: Int64) {
+            self.low = low
+            self.high = high
+        }
+
+        /// Creates a point estimate.
+        public init(_ bytes: Int64) {
+            self.init(low: bytes, high: bytes)
+        }
+
+        /// isPoint is true when the estimate is one size.
+        public var isPoint: Bool { low == high }
+    }
+
+    /// Engine is the encoder family a quality ratio was measured on.
+    public enum Engine: Hashable, Sendable {
+        /// software is the ffmpeg software encoder.
+        case software
+        /// hardware is the VideoToolbox media engine.
+        case hardware
+    }
+
+    /// Ratio is the low and high share of the source video bitrate an encode keeps.
+    struct Ratio: Equatable, Sendable {
+        /// low is the share on footage that compresses well.
+        var low: Double
+        /// high is the share on footage that does not.
+        var high: Double
+
+        /// Creates a ratio from low to high.
+        init(_ low: Double, _ high: Double) {
+            self.low = low
+            self.high = high
+        }
+
+        /// scaled returns both bounds times factor.
+        func scaled(_ factor: Double) -> Ratio { Ratio(low * factor, high * factor) }
+    }
+
     /// bytes returns the expected output size of info converted with p, or nil when the formula
-    /// has nothing to go on. TargetBytes is the size the user asked for when p aims for one.
-    public static func bytes(_ info: MediaInfo, _ p: Preset, targetBytes: Int64? = nil) -> Int64? {
+    /// has nothing to go on. Quality mode gives a range, copy, target size, and bitrate modes give
+    /// a point. TargetBytes is the size the user asked for when p aims for one, and hardware is
+    /// true when the media engine is on.
+    public static func bytes(_ info: MediaInfo, _ p: Preset, targetBytes: Int64? = nil,
+                             hardware: Bool = false) -> Range? {
         if p.video.codec == copyCodec && (p.audio.codec == copyCodec || info.audio == nil) {
-            return info.size > 0 ? info.size : nil
+            return info.size > 0 ? Range(info.size) : nil
         }
         if p.video.rateControl == RateControl.twopass, p.video.bitrate == nil {
-            return p.targetBytes ?? targetBytes
+            return (p.targetBytes ?? targetBytes).map(Range.init)
         }
         guard info.durationNs > 0 else { return nil }
         let seconds = Double(info.durationNs) / 1e9
-        guard let video = videoBitrate(info, p),
+        guard let video = videoBitrate(info, p, hardware: hardware),
               let audio = audioBitrate(info, p.audio) else { return nil }
-        let total = (video + audio) * seconds / 8 * overhead
-        return total >= 1 ? Int64(total.rounded()) : nil
+        func size(_ videoBits: Double) -> Double { (videoBits + audio) * seconds / 8 * overhead }
+        let low = size(video.low), high = size(video.high)
+        guard low >= 1 else { return nil }
+        if video.low == video.high { return Range(Int64(low.rounded())) }
+        return Range(low: Int64((low * (1 - spread)).rounded()), high: Int64((high * (1 + spread)).rounded()))
     }
 
-    /// videoBitrate returns the expected video bitrate in bits per second, zero when the output
-    /// carries no video, or nil when the codec has no known ratio.
-    static func videoBitrate(_ info: MediaInfo, _ p: Preset) -> Double? {
-        guard !p.video.codec.isEmpty, let src = info.video else { return 0 }
+    /// videoBitrate returns the expected video bitrate in bits per second as a low and high
+    /// bound, equal outside quality mode, zero when the output carries no video, or nil when the
+    /// codec has no known ratio.
+    static func videoBitrate(_ info: MediaInfo, _ p: Preset, hardware: Bool = false) -> Ratio? {
+        guard !p.video.codec.isEmpty, let src = info.video else { return Ratio(0, 0) }
         let srcVideo = sourceVideoBitrate(info)
-        if p.video.codec == copyCodec { return srcVideo }
+        if p.video.codec == copyCodec { return srcVideo.map { Ratio($0, $0) } }
         if p.video.rateControl != nil, p.video.rateControl != RateControl.quality {
-            return p.video.bitrate.map(Double.init)
+            return p.video.bitrate.map { Ratio(Double($0), Double($0)) }
         }
-        guard let table = ratios[p.video.codec], let srcVideo else { return nil }
+        let engine: Engine = hardware && ratios[.hardware]?[p.video.codec] != nil ? .hardware : .software
+        guard let table = ratios[engine]?[p.video.codec], let srcVideo else { return nil }
         let level = min(max(p.video.quality ?? QualityLevel.high, 1), table.count)
-        return srcVideo * table[level - 1] * areaScale(src, p.video)
+        return table[level - 1].scaled(srcVideo * areaScale(src, p.video))
     }
 
     /// sourceVideoBitrate is the source bitrate less an assumed audio share.
@@ -110,6 +179,20 @@ public enum Estimate {
         let size = "≈ " + Format.bytes(bytes)
         guard let source, let saving = Format.saving(from: source, to: bytes) else { return size }
         return size + ", " + saving.prefix(1).lowercased() + saving.dropFirst()
+    }
+
+    /// text formats a range for a row, e.g. "≈ 8 to 25 MB, at least 40% smaller", with the
+    /// saving taken from the high bound and shown only when the file shrinks.
+    public static func text(_ r: Range, source: Int64?) -> String {
+        let low = Format.bytes(r.low), high = Format.bytes(r.high)
+        guard !r.isPoint, low != high else { return text(r.high, source: source) }
+        var size = "≈ \(low) to \(high)"
+        if let space = high.lastIndex(where: \.isWhitespace), low.hasSuffix(high[space...]) {
+            size = "≈ \(low[..<low.index(low.endIndex, offsetBy: -high[space...].count)]) to \(high)"
+        }
+        guard let source, let saving = Format.saving(from: source, to: r.high),
+              saving.hasSuffix("smaller") else { return size }
+        return size + ", at least " + saving
     }
 
     /// parseSize reads a size such as "25MB", "8 MiB", or "1.5g" into bytes, as the backend

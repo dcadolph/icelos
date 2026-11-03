@@ -375,7 +375,8 @@ public final class Converter {
     /// row is the display model of the file with id, or nil when it is gone.
     public func row(_ id: UUID) -> RowModel? {
         guard let item = items.first(where: { $0.id == id }) else { return nil }
-        return RowModel(item: item, windowSettings: settings, catalog: catalog, targetSize: targetSize)
+        return RowModel(item: item, windowSettings: settings, catalog: catalog, targetSize: targetSize,
+                        hardware: hardware)
     }
 
     /// clearFinished drops finished items here and in the converter.

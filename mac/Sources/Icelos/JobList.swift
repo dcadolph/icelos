@@ -64,7 +64,7 @@ struct JobRow: View {
 
     var body: some View {
         let row = RowModel(item: item, windowSettings: model.settings, catalog: model.catalog,
-                           targetSize: model.targetSize)
+                           targetSize: model.targetSize, hardware: model.hardware)
         HStack(spacing: 14) {
             Thumbnail(image: model.thumbnails[item.url], media: row.media, tone: row.badge.tone)
             VStack(alignment: .leading, spacing: 4) {

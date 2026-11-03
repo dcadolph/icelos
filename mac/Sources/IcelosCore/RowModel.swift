@@ -63,7 +63,8 @@ public struct RowModel: Equatable, Sendable {
     public var chips: [String]
     /// ownSettings is true when the file uses its own settings rather than the window's.
     public var ownSettings: Bool
-    /// estimate is the expected size before converting, e.g. "≈ 48 MB, 71% smaller".
+    /// estimate is the expected size before converting, e.g. "≈ 48 MB, 71% smaller", or a range
+    /// such as "≈ 8 to 25 MB, at least 40% smaller" in quality mode.
     public var estimate: String?
     /// detail is the progress, result, or failure line, which replaces the chips once the file
     /// runs or finishes.
@@ -80,8 +81,10 @@ public struct RowModel: Equatable, Sendable {
     public var media: Media
 
     /// Creates the row for item, which converts with its own settings or else windowSettings.
-    /// TargetSize is the size typed for presets that aim for one.
-    public init(item: Item, windowSettings: Preset?, catalog: Catalog?, targetSize: String = "") {
+    /// TargetSize is the size typed for presets that aim for one, and hardware is true when the
+    /// media engine is on.
+    public init(item: Item, windowSettings: Preset?, catalog: Catalog?, targetSize: String = "",
+                hardware: Bool = false) {
         let settings = item.settings ?? windowSettings
         name = item.url.lastPathComponent
         ownSettings = item.settings != nil
@@ -104,8 +107,9 @@ public struct RowModel: Equatable, Sendable {
         switch item.phase {
         case .pending, .queued:
             if let info = item.info, let settings,
-               let bytes = Estimate.bytes(info, settings, targetBytes: Estimate.parseSize(targetSize)) {
-                estimate = Estimate.text(bytes, source: info.size > 0 ? info.size : nil)
+               let range = Estimate.bytes(info, settings, targetBytes: Estimate.parseSize(targetSize),
+                                          hardware: hardware) {
+                estimate = Estimate.text(range, source: info.size > 0 ? info.size : nil)
             }
         case .running:
             progress = item.status?.progress.percent ?? 0
