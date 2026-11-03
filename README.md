@@ -73,6 +73,12 @@ Run `go run . convert --help` for every flag.
 
 Icelos is built on [FFmpeg](https://ffmpeg.org), which does the encoding and decoding. Icelos is named for the Greek god of dreams who takes the shape of beasts and birds.
 
+The test clips in `internal/engine/testdata/media/` are short cuts from three Blender Foundation open movies, used under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). `manifest.json` in that folder records where each clip came from and how it was cut.
+
+- [Sintel](https://durian.blender.org/sharing/): © copyright Blender Foundation | durian.blender.org.
+- [Tears of Steel](https://mango.blender.org/sharing/): (CC) Blender Foundation | mango.blender.org.
+- [Big Buck Bunny](https://peach.blender.org/about/): Blender Foundation | www.blender.org. Two clips come from the Wikimedia Commons transcodes, and two were re-encoded locally to stand in for an iPhone HEVC clip and an AV1 file.
+
 ## License
 
 GPL-3.0-or-later. See the LICENSE file.
