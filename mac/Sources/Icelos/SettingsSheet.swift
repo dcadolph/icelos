@@ -84,6 +84,7 @@ struct SettingsSheet: View {
                     ForEach(catalog.audioContainers) { containerRow($0) }
                 }
             }
+            .help("The file type to write. Changing it resets the encoders to ones this format carries.")
         }
     }
 
@@ -112,6 +113,7 @@ struct SettingsSheet: View {
                     Text("Copy from source").tag(copyCodec)
                     ForEach(catalog.videoCodecs(in: container)) { codecRow($0) }
                 }
+                .help("The video codec. Copy from source keeps the original stream with no quality loss.")
                 if let codec = videoCodec {
                     if catalog.isFixed(codec, profile: draft.video.profile, in: container) {
                         modePicker(codec, container)
@@ -125,6 +127,7 @@ struct SettingsSheet: View {
                             set: { draft.video.fps = $0 == 0 ? nil : $0 })) {
                             ForEach(catalog.frameRates(for: codec), id: \.fps) { Text($0.name).tag($0.fps) }
                         }
+                        .help("Frames per second. Same as source keeps the original timing.")
                     }
                     rateControls(codec)
                     codecOptions(codec, container)
@@ -159,6 +162,7 @@ struct SettingsSheet: View {
             }
             Text("Custom size").tag("custom")
         }
+        .help("Each size is a box the video fits inside, never upscaled. Custom size sets an exact frame.")
         if exact {
             LabeledContent("Frame size") {
                 HStack(spacing: 6) {
@@ -216,6 +220,7 @@ struct SettingsSheet: View {
                      ?? "\(m.name), \(m.width)×\(m.height)").tag(i)
             }
         }
+        .help("This format only takes these frame sizes. Match the source picks the closest one.")
     }
 
     /// rateControls offers the codec's rate controls and the quality or bitrate each needs.
@@ -227,6 +232,7 @@ struct SettingsSheet: View {
                 set: { draft.video = catalog.withRateControl(draft.video, $0, keeping: draft.video) })) {
                 ForEach(controls, id: \.self) { Text(Self.rateControlName($0)).tag($0) }
             }
+            .help("Constant quality lets the size vary. Bitrate modes aim for a data rate. Two-pass is slower and more exact.")
             switch rc {
             case RateControl.quality:
                 Picker("Quality", selection: Binding(
@@ -237,6 +243,7 @@ struct SettingsSheet: View {
                     Text("Small").tag(QualityLevel.small)
                 }
                 .pickerStyle(.segmented)
+                .help("High keeps nearly all detail. Small gives the smallest file.")
             case RateControl.twopass where draft.needsSize:
                 note("Two passes aim for the size set under Fit under.")
             default:
@@ -267,6 +274,7 @@ struct SettingsSheet: View {
                 if !required { Text("Automatic").tag("") }
                 ForEach(profiles, id: \.id) { Text($0.name).tag($0.id) }
             }
+            .help("The codec profile. Older devices may need a simpler one.")
         }
         if let levels = codec.levels, !levels.isEmpty {
             Picker("Level", selection: Binding(
@@ -275,6 +283,7 @@ struct SettingsSheet: View {
                 Text("Automatic").tag("")
                 ForEach(levels, id: \.self) { Text($0).tag($0) }
             }
+            .help("Caps resolution and data rate for device compatibility. Automatic picks one that fits.")
         }
         if let tags = codec.tags, !tags.isEmpty {
             Picker("Codec tag", selection: Binding(
@@ -283,6 +292,7 @@ struct SettingsSheet: View {
                 Text("Default").tag("")
                 ForEach(tags, id: \.self) { Text($0).tag($0) }
             }
+            .help("The codec tag players look for, such as DIVX or XVID for older hardware.")
         }
     }
 
@@ -297,6 +307,7 @@ struct SettingsSheet: View {
                             let id = on ? (catalog.defaultCodec("audio", in: container)?.id ?? "") : ""
                             draft = catalog.settingAudioCodec(draft, to: id)
                         }))
+                        .help("Turn off to write a silent video.")
                 }
                 if !draft.audio.codec.isEmpty {
                     Picker("Encoder", selection: Binding(
@@ -305,6 +316,7 @@ struct SettingsSheet: View {
                         Text("Copy from source").tag(copyCodec)
                         ForEach(catalog.audioCodecs(in: container)) { codecRow($0) }
                     }
+                    .help("The audio codec. Copy from source keeps the original audio untouched.")
                     if let codec = audioCodec {
                         audioOptions(codec, container)
                     } else if draft.audio.codec == copyCodec {
@@ -324,6 +336,7 @@ struct SettingsSheet: View {
             if container.sampleRates?.isEmpty != false { Text("Same as source").tag(0) }
             ForEach(rates, id: \.self) { Text(Self.hertz($0)).tag($0) }
         }
+        .help("Samples per second. Use 48 kHz for video and 44.1 kHz for music.")
         let layouts = catalog.channelLayouts(for: codec, in: container)
         Picker("Channels", selection: Binding(
             get: { draft.audio.channels ?? 0 },
@@ -331,6 +344,7 @@ struct SettingsSheet: View {
             if container.channels == nil { Text("Same as source").tag(0) }
             ForEach(layouts, id: \.count) { Text($0.name).tag($0.count) }
         }
+        .help("Mono, stereo, or surround. Same as source keeps the original layout.")
         let choices = catalog.audioBitrates(for: codec, sampleRate: draft.audio.sampleRate,
                                             channels: draft.audio.channels)
         if let fixed = codec.bitrates, !fixed.isEmpty {
@@ -356,6 +370,7 @@ struct SettingsSheet: View {
                 Text("Same as source").tag(0)
                 ForEach(depths, id: \.self) { Text("\($0)-bit").tag($0) }
             }
+            .help("Bits per sample. 24-bit keeps studio detail. 16-bit matches CD audio.")
         }
     }
 
@@ -373,6 +388,7 @@ struct SettingsSheet: View {
     private var footer: some View {
         HStack(spacing: 10) {
             Button("Reset") { draft = original }
+            .help("Go back to the settings this sheet started from.")
                 .disabled(draft == original)
             if naming {
                 TextField("Preset name", text: $presetName)
@@ -383,6 +399,7 @@ struct SettingsSheet: View {
                     .disabled(presetName.trimmingCharacters(in: .whitespaces).isEmpty)
             } else {
                 Button("Save as Preset…") { naming = true }
+                .help("Keep these settings as a preset on the Custom tab.")
             }
             Spacer()
             Button("Cancel", role: .cancel) { dismiss() }
@@ -451,6 +468,7 @@ struct BitrateField: View {
                 .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 80)
+                .help("Kilobits per second. Higher is sharper and larger. Leave empty for the encoder's default.")
             Text("kb/s").foregroundStyle(.secondary)
             Menu {
                 ForEach(choices, id: \.self) { b in
@@ -462,6 +480,7 @@ struct BitrateField: View {
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .fixedSize()
+            .help("Common bitrates")
         }
     }
 

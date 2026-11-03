@@ -188,6 +188,7 @@ struct OptionsBar: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .help("Where converted files go.")
         }
         .font(.callout)
     }

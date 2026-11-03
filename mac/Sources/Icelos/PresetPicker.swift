@@ -45,6 +45,8 @@ struct PresetPicker: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .fixedSize()
+                .help("Presets are ready-made targets. Video and Audio list every format. "
+                      + "Custom holds the settings you saved.")
                 Spacer()
                 if let settings = model.settings {
                     Text(selectionLabel(settings))
@@ -99,7 +101,7 @@ struct PresetPicker: View {
 
     /// cards lays out preset cards.
     private func cards(_ presets: [Preset]) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 148), spacing: 10)], spacing: 10) {
+        BalancedGrid(minCellWidth: 160, spacing: 10) {
             ForEach(presets) { preset in
                 let selected = preset.id == model.presetID
                 PresetCard(preset: preset, selected: selected, edited: selected && model.isEdited,
@@ -115,10 +117,11 @@ struct PresetPicker: View {
 
     /// formats lays out catalog containers as chips.
     private func formats(_ containers: [Container], catalog: Catalog) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 96), spacing: 8)], spacing: 8) {
+        BalancedGrid(minCellWidth: 96, spacing: 8) {
             ForEach(containers) { c in
                 let usable = catalog.isUsable(c)
                 FormatChip(container: c, selected: isSelected(c), usable: usable,
+                           summary: catalog.summary(catalog.target(for: c)),
                            select: { if usable { model.select(container: c) } }, openSettings: openSettings)
             }
         }
@@ -137,6 +140,8 @@ struct PresetPicker: View {
                     ForEach(catalog.domains.resolutions) { r in
                         Chip(text: r.name, selected: r.id == current)
                             .onTapGesture { model.select(container: c, resolution: r) }
+                            .help(r.width == 0 ? "Keep the source frame size."
+                                  : "Fit inside \(r.width)×\(r.height). Smaller sources are never upscaled.")
                     }
                 }
             } else if settings.video.codec != copyCodec {
@@ -188,6 +193,11 @@ struct PresetCard: View {
             Text(edited ? "\(preset.name) (edited)" : preset.name)
                 .font(.callout.weight(.semibold))
                 .lineLimit(1)
+            Text(preset.description)
+                .font(.caption)
+                .foregroundStyle(Theme.bone.opacity(0.55))
+                .lineLimit(2, reservesSpace: true)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -230,6 +240,8 @@ struct FormatChip: View {
     let selected: Bool
     /// usable is false when no codec for the format is available.
     let usable: Bool
+    /// summary describes what the format starts with.
+    let summary: String
     /// select chooses the format.
     let select: () -> Void
     /// openSettings opens the settings sheet.
@@ -260,7 +272,8 @@ struct FormatChip: View {
             select()
             if usable { openSettings() }
         }
-        .help(usable ? ".\(container.ext) file" : "Needs the bundled ffmpeg.")
+        .help(usable ? "\(summary) Saves as .\(container.ext)."
+              : "\(container.name) needs the bundled ffmpeg, which this build does not have yet.")
     }
 }
 
