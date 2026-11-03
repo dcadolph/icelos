@@ -10,6 +10,24 @@ public struct Preset: Codable, Hashable, Identifiable, Sendable {
         public var maxWidth: Int?
         /// maxHeight caps the short side in pixels.
         public var maxHeight: Int?
+        /// width is the exact output width in pixels.
+        public var width: Int?
+        /// height is the exact output height in pixels.
+        public var height: Int?
+        /// fps is the output frame rate.
+        public var fps: Double?
+        /// rateControl is "quality", "cbr", "vbr", or "twopass".
+        public var rateControl: String?
+        /// bitrate is in bits per second.
+        public var bitrate: Int?
+        /// profile is the codec profile ID.
+        public var profile: String?
+        /// level is the codec level.
+        public var level: String?
+        /// tag is the container codec tag.
+        public var tag: String?
+        /// quality is the constant-quality step.
+        public var quality: Int?
     }
 
     /// Audio holds the audio half of a preset.
@@ -20,6 +38,10 @@ public struct Preset: Codable, Hashable, Identifiable, Sendable {
         public var bitrate: Int?
         /// channels caps the channel count.
         public var channels: Int?
+        /// sampleRate is in hertz.
+        public var sampleRate: Int?
+        /// bitDepth is the sample depth in bits.
+        public var bitDepth: Int?
     }
 
     /// id is the stable preset identifier.
@@ -28,6 +50,8 @@ public struct Preset: Codable, Hashable, Identifiable, Sendable {
     public var name: String
     /// description says who the preset is for.
     public var description: String
+    /// container is the output container ID.
+    public var container: String?
     /// ext is the output extension without the dot.
     public var ext: String
     /// video is the video settings.
@@ -201,6 +225,8 @@ public struct Message: Codable, Sendable {
     public var encoders: [String]?
     /// presets lists the built-in presets.
     public var presets: [Preset]?
+    /// catalog is the format catalog.
+    public var catalog: Catalog?
     /// info is a probe result.
     public var info: MediaInfo?
     /// status is one job snapshot.
