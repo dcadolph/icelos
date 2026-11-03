@@ -8,7 +8,7 @@ Icelos takes video and audio files in and hands them back in a new format or a s
 
 ## Status
 
-Early and unreleased. The converter engine, the command line tool, and the Mac app work from source. There are no signed builds yet. The goals below describe where the project is headed, not what works today.
+Early. The command line tool has release archives for macOS, Linux, and Windows on the [releases page](https://github.com/dcadolph/icelos/releases), each with a signed checksum file and build provenance. It needs FFmpeg on the PATH. The Mac app works from source and has no signed build yet. The goals below describe where the project is headed, not what works today.
 
 What works today:
 
