@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/banner.png" alt="icelos: Form is never final."></p>
+<p align="center"><img src="assets/banner.png" alt="Icelos"></p>
 
 <h1 align="center">Icelos</h1>
 
