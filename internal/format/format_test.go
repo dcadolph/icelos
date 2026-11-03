@@ -563,3 +563,13 @@ func TestCodecLookupsCopy(t *testing.T) {
 		t.Error("a returned codec aliases the catalog")
 	}
 }
+
+// TestNeedsVideoContainersAreVideo checks that only video containers demand a video stream.
+func TestNeedsVideoContainersAreVideo(t *testing.T) {
+	t.Parallel()
+	for _, c := range Containers() {
+		if c.Flags.NeedsVideo && c.Kind != KindVideo {
+			t.Errorf("container %q needs video but has kind %q", c.ID, c.Kind)
+		}
+	}
+}

@@ -140,6 +140,8 @@ type Flags struct {
 	// Shortest ends the file with its shortest stream, for muxers that refuse a last video frame
 	// without its full share of audio.
 	Shortest bool `json:"shortest,omitempty"`
+	// NeedsVideo marks a muxer that refuses output without a video stream.
+	NeedsVideo bool `json:"needsVideo,omitempty"`
 }
 
 // Container is one output file format.

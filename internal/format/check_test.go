@@ -227,17 +227,33 @@ func TestCheck(t *testing.T) { //nolint:funlen,maintidx // Test function.
 		In:   Target{Container: "opus", Audio: Audio{Codec: "opus", SampleRate: 44100}},
 		Want: ErrSetting,
 	}, { // Test 85: DV carries stereo.
-		In: Target{Container: "dv", Audio: Audio{Codec: "pcm_s16le", Channels: 2}},
+		In: Target{Container: "dv", Video: Video{Codec: "dvvideo"},
+			Audio: Audio{Codec: "pcm_s16le", Channels: 2}},
 	}, { // Test 86: DV refuses mono.
-		In: Target{Container: "dv", Audio: Audio{Codec: "pcm_s16le", Channels: 1}}, Want: ErrSetting,
+		In: Target{Container: "dv", Video: Video{Codec: "dvvideo"},
+			Audio: Audio{Codec: "pcm_s16le", Channels: 1}},
+		Want: ErrSetting,
 	}, { // Test 87: DV refuses 44.1 kHz.
-		In: Target{Container: "dv", Audio: Audio{Codec: "pcm_s16le", SampleRate: 44100}}, Want: ErrSetting,
+		In: Target{Container: "dv", Video: Video{Codec: "dvvideo"},
+			Audio: Audio{Codec: "pcm_s16le", SampleRate: 44100}},
+		Want: ErrSetting,
 	}, { // Test 88: AMV at 25 fps passes.
 		In: Target{Container: "amv", Video: Video{Codec: "amv", RateControl: RateVBR, Bitrate: 500_000,
 			FPS: 25}},
 	}, { // Test 89: AMV at 24 fps fails, since 22050 Hz audio does not split into 24 blocks.
 		In: Target{Container: "amv", Video: Video{Codec: "amv", RateControl: RateVBR, Bitrate: 500_000,
 			FPS: 24}},
+		Want: ErrSetting,
+	}, { // Test 90: DV audio only is refused.
+		In:   Target{Container: "dv", Audio: Audio{Codec: "pcm_s16le", SampleRate: 48000, Channels: 2}},
+		Want: ErrSetting,
+	}, { // Test 91: AMV audio only is refused.
+		In:   Target{Container: "amv", Audio: Audio{Codec: "adpcm_ima_amv"}},
+		Want: ErrSetting,
+	}, { // Test 92: MP4 audio only passes.
+		In: Target{Container: "mp4", Audio: Audio{Codec: "aac"}},
+	}, { // Test 93: MXF audio only is refused.
+		In:   Target{Container: "mxf", Audio: Audio{Codec: "pcm_s16le"}},
 		Want: ErrSetting,
 	}}
 	for testNum, test := range tests {

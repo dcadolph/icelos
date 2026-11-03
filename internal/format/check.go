@@ -19,6 +19,9 @@ func Check(t Target) error {
 	if !t.HasVideo() && !t.HasAudio() {
 		return fmt.Errorf("%w: %s: no video and no audio", ErrSetting, c.ID)
 	}
+	if c.Flags.NeedsVideo && !t.HasVideo() {
+		return fmt.Errorf("%w: %s: needs a video stream", ErrSetting, c.ID)
+	}
 	if t.TargetBytes < 0 {
 		return fmt.Errorf("%w: negative target size", ErrSetting)
 	}

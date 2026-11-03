@@ -32,6 +32,8 @@ type sweepCase struct {
 	Target format.Target
 	// Hardware asks for VideoToolbox.
 	Hardware bool
+	// WantRefused is true when the catalog must refuse the target.
+	WantRefused bool
 }
 
 // sweepVideo returns video settings for codec under rate control rc.
@@ -107,6 +109,11 @@ func sweepCases(avail EncoderSet) []sweepCase {
 				break
 			}
 		}
+		if box.Kind == format.KindVideo && firstAudio != "" {
+			t := format.Target{Container: box.ID, Audio: format.Audio{Codec: firstAudio}}
+			cases = append(cases, sweepCase{Name: box.ID + "/audio-only", Target: t,
+				WantRefused: box.Flags.NeedsVideo})
+		}
 		for _, id := range box.Audio {
 			codec, _ := format.CodecByID(id)
 			if !usable(codec) {
@@ -174,7 +181,12 @@ func TestEncodeCatalog(t *testing.T) { //nolint:funlen // Test function.
 		t.Run(test.Name, func(t *testing.T) {
 			t.Parallel()
 			p := preset.Preset{ID: "sweep", Target: test.Target}
-			if err := p.Validate(); err != nil {
+			switch err := p.Validate(); {
+			case err != nil && test.WantRefused:
+				return
+			case test.WantRefused:
+				t.Fatal("catalog accepts a target its muxer refuses")
+			case err != nil:
 				t.Skipf("catalog refuses: %v", err)
 			}
 			dest := filepath.Join(dir, fmt.Sprintf("out%d.%s", i, p.Ext()))
