@@ -51,7 +51,7 @@ struct PresetPicker: View {
                 if let settings = model.settings {
                     Text(selectionLabel(settings))
                         .font(.caption)
-                        .foregroundStyle(Theme.bone.opacity(0.55))
+                        .foregroundStyle(Theme.muted)
                         .lineLimit(1)
                 }
             }
@@ -78,7 +78,7 @@ struct PresetPicker: View {
             if model.customPresets.isEmpty {
                 Text("Open the settings with the gear on any card, then choose Save as Preset.")
                     .font(.callout)
-                    .foregroundStyle(Theme.bone.opacity(0.55))
+                    .foregroundStyle(Theme.muted)
                     .frame(maxWidth: .infinity, minHeight: 60)
             } else {
                 cards(model.customPresets)
@@ -86,7 +86,7 @@ struct PresetPicker: View {
             if let error = model.presetError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
-                    .foregroundStyle(Theme.ember)
+                    .foregroundStyle(Theme.danger)
             }
         }
     }
@@ -95,7 +95,7 @@ struct PresetPicker: View {
     private var loading: some View {
         Text("Loading formats…")
             .font(.callout)
-            .foregroundStyle(Theme.bone.opacity(0.55))
+            .foregroundStyle(Theme.muted)
             .frame(maxWidth: .infinity, minHeight: 60)
     }
 
@@ -136,7 +136,7 @@ struct PresetPicker: View {
                 HStack(spacing: 8) {
                     Text(c.name)
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(Theme.bone.opacity(0.55))
+                        .foregroundStyle(Theme.muted)
                     ForEach(catalog.domains.resolutions) { r in
                         Chip(text: r.name, selected: r.id == current)
                             .onTapGesture { model.select(container: c, resolution: r) }
@@ -147,7 +147,7 @@ struct PresetPicker: View {
             } else if settings.video.codec != copyCodec {
                 Text("\(c.name) takes fixed frame sizes. Pick one in the settings.")
                     .font(.caption)
-                    .foregroundStyle(Theme.bone.opacity(0.55))
+                    .foregroundStyle(Theme.muted)
             }
         }
     }
@@ -183,11 +183,11 @@ struct PresetCard: View {
             HStack {
                 Image(systemName: preset.isCustom ? "slider.horizontal.3" : PresetCard.symbol(for: preset.id))
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(selected ? Theme.ice : Theme.bone.opacity(0.7))
+                    .foregroundStyle(selected ? Theme.accent : Theme.muted)
                 Spacer()
                 Text(preset.ext.uppercased())
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(Theme.bone.opacity(0.45))
+                    .foregroundStyle(Theme.muted)
                 if selected { GearButton(action: openSettings) }
             }
             Text(edited ? "\(preset.name) (edited)" : preset.name)
@@ -195,15 +195,15 @@ struct PresetCard: View {
                 .lineLimit(1)
             Text(preset.description)
                 .font(.caption)
-                .foregroundStyle(Theme.bone.opacity(0.55))
+                .foregroundStyle(Theme.muted)
                 .lineLimit(2, reservesSpace: true)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surface(selected: selected)))
+        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.fill(selected: selected)))
         .overlay(RoundedRectangle(cornerRadius: 12)
-            .strokeBorder(selected ? Theme.ice.opacity(0.7) : Color.white.opacity(0.06), lineWidth: 1))
+            .strokeBorder(selected ? Theme.accent.opacity(0.7) : Theme.border, lineWidth: 1))
         .contentShape(RoundedRectangle(cornerRadius: 12))
         .onTapGesture(perform: select)
         .accessibilityElement(children: .combine)
@@ -259,9 +259,9 @@ struct FormatChip: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.surface(selected: selected)))
+        .background(RoundedRectangle(cornerRadius: 9).fill(Theme.fill(selected: selected)))
         .overlay(RoundedRectangle(cornerRadius: 9)
-            .strokeBorder(selected ? Theme.ice.opacity(0.7) : Color.white.opacity(0.06), lineWidth: 1))
+            .strokeBorder(selected ? Theme.accent.opacity(0.7) : Theme.border, lineWidth: 1))
         .opacity(usable ? 1 : 0.4)
         .contentShape(RoundedRectangle(cornerRadius: 9))
         .onTapGesture(perform: select)
@@ -289,8 +289,8 @@ struct Chip: View {
             .font(.caption.weight(.medium))
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(Capsule().fill(Theme.surface(selected: selected)))
-            .overlay(Capsule().strokeBorder(selected ? Theme.ice.opacity(0.7) : .clear, lineWidth: 1))
+            .background(Capsule().fill(Theme.fill(selected: selected)))
+            .overlay(Capsule().strokeBorder(Theme.accent.opacity(selected ? 0.7 : 0), lineWidth: 1))
             .contentShape(Capsule())
             .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
     }
@@ -306,7 +306,7 @@ struct GearButton: View {
             Image(systemName: "gearshape.fill").font(.system(size: 13))
         }
         .buttonStyle(.borderless)
-        .foregroundStyle(Theme.ice)
+        .foregroundStyle(Theme.accent)
         .help("Settings")
         .accessibilityLabel("Settings")
     }

@@ -23,7 +23,7 @@ struct JobList: View {
         .scrollIndicators(.automatic)
         .overlay {
             RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(Theme.ice.opacity(targeted ? 0.7 : 0), lineWidth: 1.5)
+                .strokeBorder(Theme.accent.opacity(targeted ? 0.7 : 0), lineWidth: 1.5)
                 .allowsHitTesting(false)
         }
     }
@@ -52,7 +52,7 @@ struct JobRow: View {
             actions
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.surface()))
+        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.fill()))
         .contextMenu { menu }
         .animation(.easeOut(duration: 0.2), value: item.phase)
     }
@@ -61,7 +61,7 @@ struct JobRow: View {
     private var icon: some View {
         let audio = item.info.map { $0.video == nil } ?? false
         return ZStack {
-            RoundedRectangle(cornerRadius: 9).fill(Theme.deep)
+            RoundedRectangle(cornerRadius: 9).fill(Theme.surface)
             Image(systemName: iconName(audio: audio))
                 .font(.system(size: 16, weight: .medium))
                 .foregroundStyle(iconColor)
@@ -80,12 +80,12 @@ struct JobRow: View {
     }
 
     /// iconColor tints the row symbol.
-    private var iconColor: Color {
+    private var iconColor: ThemeColor {
         switch item.phase {
-        case .done: Theme.emerald
-        case .failed: Theme.ember
-        case .canceled: Theme.bone.opacity(0.5)
-        default: Theme.ice
+        case .done: Theme.success
+        case .failed: Theme.danger
+        case .canceled: Theme.muted
+        default: Theme.accent
         }
     }
 
@@ -93,7 +93,7 @@ struct JobRow: View {
     @ViewBuilder private var detail: some View {
         switch item.phase {
         case .pending:
-            secondary(item.probeError ?? pendingText, color: item.probeError == nil ? nil : Theme.ember)
+            secondary(item.probeError ?? pendingText, color: item.probeError == nil ? nil : Theme.danger)
         case .queued:
             secondary("Waiting…")
         case .running:
@@ -102,9 +102,9 @@ struct JobRow: View {
                 secondary(runningText)
             }
         case .done:
-            secondary(doneText, color: Theme.emerald)
+            secondary(doneText, color: Theme.success)
         case .failed:
-            secondary(item.errorMessage ?? "Failed.", color: Theme.ember)
+            secondary(item.errorMessage ?? "Failed.", color: Theme.danger)
                 .textSelection(.enabled)
         case .canceled:
             secondary("Canceled.")
@@ -140,11 +140,11 @@ struct JobRow: View {
     }
 
     /// secondary styles a detail line.
-    private func secondary(_ text: String, color: Color? = nil) -> some View {
+    private func secondary(_ text: String, color: ThemeColor? = nil) -> some View {
         Text(text)
             .font(.caption)
             .monospacedDigit()
-            .foregroundStyle(color ?? Theme.bone.opacity(0.55))
+            .foregroundStyle(color ?? Theme.muted)
             .lineLimit(2)
     }
 
@@ -172,7 +172,7 @@ struct JobRow: View {
             Image(systemName: symbol).font(.system(size: 18))
         }
         .buttonStyle(.borderless)
-        .foregroundStyle(Theme.bone.opacity(0.7))
+        .foregroundStyle(Theme.muted)
         .help(help)
         .accessibilityLabel(help)
     }

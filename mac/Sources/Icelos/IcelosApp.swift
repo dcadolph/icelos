@@ -17,6 +17,7 @@ struct IcelosApp: App {
         Window("Icelos", id: "main") {
             ContentView(model: session.model)
                 .frame(minWidth: 780, minHeight: 560)
+                .themed()
                 .onAppear { session.start() }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     session.stop()

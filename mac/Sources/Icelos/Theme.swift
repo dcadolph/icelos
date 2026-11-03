@@ -1,41 +1,97 @@
+import AppKit
+import IcelosCore
 import SwiftUI
 
-/// Theme holds the icelos palette: bone white to ice blue to emerald on midnight.
-enum Theme {
-    /// midnight is the window base.
-    static let midnight = Color(red: 0x07 / 255, green: 0x16 / 255, blue: 0x1B / 255)
-    /// deep is the raised surface color.
-    static let deep = Color(red: 0x0D / 255, green: 0x27 / 255, blue: 0x30 / 255)
-    /// bone is the primary text color.
-    static let bone = Color(red: 0xF2 / 255, green: 0xEE / 255, blue: 0xE6 / 255)
-    /// ice is the accent color.
-    static let ice = Color(red: 0x9F / 255, green: 0xD8 / 255, blue: 0xE6 / 255)
-    /// emerald is the success and action color.
-    static let emerald = Color(red: 0x2F / 255, green: 0xBF / 255, blue: 0x8F / 255)
-    /// ember marks failures.
-    static let ember = Color(red: 0xF0 / 255, green: 0x7A / 255, blue: 0x6A / 255)
+extension EnvironmentValues {
+    /// themeName is the theme the window draws with.
+    @Entry var themeName: ThemeName = .standard
 
-    /// brand runs across the logo colors.
-    static let brand = LinearGradient(colors: [bone, ice, emerald], startPoint: .leading, endPoint: .trailing)
-
-    /// background is the window backdrop with a soft ice glow from the top.
-    static var background: some View {
-        ZStack {
-            midnight
-            RadialGradient(colors: [ice.opacity(0.14), .clear], center: .top, startRadius: 0, endRadius: 520)
-            RadialGradient(colors: [emerald.opacity(0.08), .clear], center: .bottomTrailing,
-                           startRadius: 0, endRadius: 480)
-        }
-        .ignoresSafeArea()
-    }
-
-    /// surface is the fill for cards and rows.
-    static func surface(selected: Bool = false) -> some ShapeStyle {
-        selected ? AnyShapeStyle(ice.opacity(0.16)) : AnyShapeStyle(Color.white.opacity(0.045))
+    /// palette is the theme's palette for the current appearance and contrast setting.
+    var palette: Palette {
+        let palette = themeName.palette(dark: colorScheme == .dark)
+        return colorSchemeContrast == .increased ? palette.increasedContrast : palette
     }
 }
 
-/// GradientBar is a slim progress bar filled with the brand gradient.
+/// ThemeColor is one palette slot that resolves against the window's theme, appearance, and contrast.
+struct ThemeColor: ShapeStyle {
+    /// slot is the palette color drawn.
+    var slot: Palette.Slot
+    /// alpha scales the slot's own opacity.
+    var alpha: Double = 1
+
+    /// opacity returns the slot drawn at a fraction of its opacity.
+    func opacity(_ alpha: Double) -> ThemeColor {
+        ThemeColor(slot: slot, alpha: self.alpha * alpha)
+    }
+
+    /// resolve returns the slot's color in the environment's palette.
+    func resolve(in environment: EnvironmentValues) -> Color {
+        environment.palette.swatch(slot).color.opacity(alpha)
+    }
+}
+
+/// Theme names the palette slots views draw with.
+enum Theme {
+    /// background is the window base.
+    static let background = ThemeColor(slot: .background)
+    /// surface is the fill for rows and panels.
+    static let surface = ThemeColor(slot: .surface)
+    /// raised is the selected row and inspector fill.
+    static let raised = ThemeColor(slot: .raised)
+    /// text is the primary text color.
+    static let text = ThemeColor(slot: .text)
+    /// muted is the secondary text color.
+    static let muted = ThemeColor(slot: .muted)
+    /// accent marks selection, progress, and the primary action.
+    static let accent = ThemeColor(slot: .accent)
+    /// border is the hairline around surfaces.
+    static let border = ThemeColor(slot: .border)
+    /// success marks finished work.
+    static let success = ThemeColor(slot: .success)
+    /// danger marks failures.
+    static let danger = ThemeColor(slot: .danger)
+    /// onAccent is text drawn on an accent fill.
+    static let onAccent = ThemeColor(slot: .onAccent)
+    /// accentText is accent-colored text that reads on the background.
+    static let accentText = ThemeColor(slot: .accentText)
+
+    /// backdrop is the window background, under the title bar too.
+    static var backdrop: some View {
+        Rectangle().fill(background).ignoresSafeArea()
+    }
+
+    /// fill is the surface for cards and rows, raised when selected.
+    static func fill(selected: Bool = false) -> ThemeColor {
+        selected ? raised : surface
+    }
+}
+
+/// ThemeApplier sets the theme environment and the app appearance from the stored settings.
+struct ThemeApplier: ViewModifier {
+    /// theme is the stored theme choice.
+    @AppStorage("theme") private var theme = ThemeName.standard
+    /// appearance is the stored light or dark choice.
+    @AppStorage("appearance") private var appearance = Appearance.system
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.themeName, theme)
+            .tint(Theme.accent)
+            .onChange(of: theme.forcedDark(appearance), initial: true) { _, dark in
+                NSApplication.shared.appearance = dark.map { NSAppearance(named: $0 ? .darkAqua : .aqua) } ?? nil
+            }
+    }
+}
+
+extension View {
+    /// themed draws the view with the stored theme and appearance.
+    func themed() -> some View {
+        modifier(ThemeApplier())
+    }
+}
+
+/// GradientBar is a slim progress bar filled with the accent.
 struct GradientBar: View {
     /// value is the fill from 0 to 1.
     var value: Double
@@ -43,8 +99,8 @@ struct GradientBar: View {
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.08))
-                Capsule().fill(Theme.brand)
+                Capsule().fill(Theme.text.opacity(0.08))
+                Capsule().fill(Theme.accent)
                     .frame(width: max(6, geo.size.width * min(1, max(0, value))))
                     .animation(.easeOut(duration: 0.35), value: value)
             }

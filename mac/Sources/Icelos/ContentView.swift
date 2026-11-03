@@ -32,15 +32,14 @@ struct ContentView: View {
             .padding(.horizontal, 24)
             footer
         }
-        .foregroundStyle(Theme.bone)
-        .background(Theme.background)
+        .foregroundStyle(Theme.text)
+        .background(Theme.backdrop)
         .dropDestination(for: URL.self) { urls, _ in
             let files = MediaFiles.expand(urls)
             model.add(urls: files)
             return !files.isEmpty
         } isTargeted: { dropTargeted = $0 }
         .sheet(item: $editing) { sheet(for: $0) }
-        .preferredColorScheme(.dark)
     }
 
     /// sheet builds the settings sheet for the window settings or one file's override.
@@ -74,10 +73,10 @@ struct ContentView: View {
         HStack(alignment: .firstTextBaseline) {
             Text("icelos")
                 .font(.system(size: 30, weight: .semibold, design: .rounded))
-                .foregroundStyle(Theme.brand)
+                .foregroundStyle(Theme.accent)
             Text("Free video converter")
                 .font(.callout)
-                .foregroundStyle(Theme.bone.opacity(0.55))
+                .foregroundStyle(Theme.muted)
             Spacer()
             if !model.encoders.isEmpty {
                 Label(model.hasHardware ? "Media Engine ready" : "Software encoding",
@@ -85,8 +84,8 @@ struct ContentView: View {
                     .font(.caption.weight(.medium))
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .background(Capsule().fill(Theme.surface()))
-                    .foregroundStyle(model.hasHardware ? Theme.emerald : Theme.ice)
+                    .background(Capsule().fill(Theme.fill()))
+                    .foregroundStyle(model.hasHardware ? Theme.success : Theme.accent)
             }
         }
         .padding(.horizontal, 24)
@@ -112,14 +111,14 @@ struct ContentView: View {
                     .frame(minWidth: 96)
             }
             .buttonStyle(.borderedProminent)
-            .tint(Theme.emerald)
+            .tint(Theme.accent)
             .disabled(model.pendingCount == 0 || model.settings == nil)
             .keyboardShortcut(.return, modifiers: .command)
         }
         .controlSize(.large)
         .padding(.horizontal, 24)
         .padding(.vertical, 16)
-        .background(Theme.midnight.opacity(0.6))
+        .background(Theme.background.opacity(0.6))
     }
 
     /// summary shows overall progress while busy, then the space saved.
@@ -127,15 +126,15 @@ struct ContentView: View {
         if let progress = model.overallProgress {
             HStack(spacing: 10) {
                 GradientBar(value: progress).frame(width: 140)
-                Text("\(Int(progress * 100))%").monospacedDigit().foregroundStyle(Theme.bone.opacity(0.7))
+                Text("\(Int(progress * 100))%").monospacedDigit().foregroundStyle(Theme.muted)
             }
         } else if model.savedBytes > 0 {
             Label("Saved \(Format.bytes(model.savedBytes))", systemImage: "leaf.fill")
-                .foregroundStyle(Theme.emerald)
+                .foregroundStyle(Theme.success)
         } else if let version = model.version {
             Text("icelos \(version) · Free and open source · No account, no upsells")
                 .font(.caption)
-                .foregroundStyle(Theme.bone.opacity(0.4))
+                .foregroundStyle(Theme.muted)
         }
     }
 }
@@ -150,8 +149,8 @@ struct FaultBanner: View {
             .font(.callout)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .background(RoundedRectangle(cornerRadius: 10).fill(Theme.ember.opacity(0.18)))
-            .foregroundStyle(Theme.ember)
+            .background(RoundedRectangle(cornerRadius: 10).fill(Theme.danger.opacity(0.18)))
+            .foregroundStyle(Theme.danger)
             .padding(.horizontal, 24)
             .textSelection(.enabled)
     }
@@ -205,12 +204,12 @@ struct DropZone: View {
         VStack(spacing: 14) {
             Image(systemName: "square.and.arrow.down.on.square")
                 .font(.system(size: 44, weight: .light))
-                .foregroundStyle(Theme.brand)
+                .foregroundStyle(Theme.accent)
                 .symbolEffect(.bounce, value: targeted)
             Text("Drop videos or music here")
                 .font(.title3.weight(.medium))
             Text("Folders work too. Nothing leaves your Mac.")
-                .foregroundStyle(Theme.bone.opacity(0.55))
+                .foregroundStyle(Theme.muted)
             Button("Choose Files…", action: choose)
                 .buttonStyle(.bordered)
                 .controlSize(.large)
@@ -220,8 +219,8 @@ struct DropZone: View {
         .background {
             RoundedRectangle(cornerRadius: 18)
                 .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [7, 6]))
-                .foregroundStyle(targeted ? Theme.ice : Theme.bone.opacity(0.18))
-                .background(RoundedRectangle(cornerRadius: 18).fill(targeted ? Theme.ice.opacity(0.08) : .clear))
+                .foregroundStyle(targeted ? Theme.accent : Theme.text.opacity(0.18))
+                .background(RoundedRectangle(cornerRadius: 18).fill(Theme.accent.opacity(targeted ? 0.08 : 0)))
         }
         .animation(.easeOut(duration: 0.2), value: targeted)
     }

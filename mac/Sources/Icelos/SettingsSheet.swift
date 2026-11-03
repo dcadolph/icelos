@@ -52,7 +52,7 @@ struct SettingsSheet: View {
             if let error {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
-                    .foregroundStyle(Theme.ember)
+                    .foregroundStyle(Theme.danger)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 20)
                     .textSelection(.enabled)
@@ -172,7 +172,7 @@ struct SettingsSheet: View {
                 }
             }
             if let problem = sizeProblem {
-                note(problem, color: Theme.ember)
+                note(problem, color: Theme.danger)
             }
         }
     }
@@ -360,7 +360,7 @@ struct SettingsSheet: View {
             let cap = catalog.maxAudioBitrate(for: codec, sampleRate: draft.audio.sampleRate,
                                               channels: draft.audio.channels)
             if cap > 0, let b = draft.audio.bitrate, b > cap {
-                note("\(codec.name) tops out at \(BitrateField.label(cap)) here.", color: Theme.ember)
+                note("\(codec.name) tops out at \(BitrateField.label(cap)) here.", color: Theme.danger)
             }
         }
         if let depths = codec.bitDepths, depths.count > 1 {
@@ -424,10 +424,10 @@ struct SettingsSheet: View {
     }
 
     /// note is a secondary line of explanation.
-    private func note(_ text: String, color: Color? = nil) -> some View {
+    private func note(_ text: String, color: ThemeColor? = nil) -> some View {
         Text(text)
             .font(.callout)
-            .foregroundStyle(color ?? .secondary)
+            .foregroundStyle(color ?? Theme.muted)
     }
 
     /// rateControlName labels a rate control.
