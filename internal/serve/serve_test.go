@@ -272,6 +272,8 @@ func TestPlan(t *testing.T) { //nolint:funlen // Test function.
 	small := `"presetBody":{"id":"small","name":"Small","container":"mp4",` +
 		`"video":{"codec":"h264","width":1280,"rateControl":"quality","quality":2},` +
 		`"audio":{"codec":"aac","bitrate":128000}}`
+	// Queued jobs write to their own folder so a finished add cannot take a name a plan expects.
+	jobs := `"outDir":"` + t.TempDir() + `",`
 	testSend(t, in,
 		`{"id":"p0","op":"plan","input":"`+clip+`","preset":"compatible","hardware":false}`,
 		`{"id":"p1","op":"plan","input":"`+clip+`",`+small+`}`,
@@ -283,10 +285,12 @@ func TestPlan(t *testing.T) { //nolint:funlen // Test function.
 		`{"id":"p6","op":"plan","input":"`+voice+`","preset":"web"}`,
 		`{"id":"p7","op":"plan","input":"`+clip+`","preset":"compatible","hardware":false,"passthrough":true}`,
 		`{"id":"p8","op":"plan","input":"`+clip+`",`+small+`,"passthrough":true}`,
-		`{"id":"a0","op":"add","input":"`+clip+`","preset":"web","streams":{"threads":3,"dropChapters":true}}`,
-		`{"id":"a1","op":"add","input":"`+clip+`","preset":"web","streams":{"subtitles":{"mode":"wild"}}}`,
-		`{"id":"s0","op":"add","input":"`+chaptered+`","preset":"web","splitChapters":true}`,
-		`{"id":"s1","op":"add","input":"`+clip+`","preset":"remux","splitChapters":true}`,
+		`{"id":"a0","op":"add","input":"`+clip+`",`+jobs+`"preset":"web",`+
+			`"streams":{"threads":3,"dropChapters":true}}`,
+		`{"id":"a1","op":"add","input":"`+clip+`",`+jobs+`"preset":"web",`+
+			`"streams":{"subtitles":{"mode":"wild"}}}`,
+		`{"id":"s0","op":"add","input":"`+chaptered+`",`+jobs+`"preset":"web","splitChapters":true}`,
+		`{"id":"s1","op":"add","input":"`+clip+`",`+jobs+`"preset":"remux","splitChapters":true}`,
 		`{"id":"l","op":"list"}`,
 	)
 	verdict := func(v *engine.Verdict) string {
