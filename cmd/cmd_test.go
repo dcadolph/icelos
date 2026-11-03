@@ -13,6 +13,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/dcadolph/icelos/cmd/config"
+	"github.com/dcadolph/icelos/internal/engine"
 	"github.com/dcadolph/icelos/internal/format"
 	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/queue"
@@ -21,9 +22,12 @@ import (
 
 // testFFprobe prints a fixed two-stream probe result.
 const testFFprobe = `#!/bin/sh
+chapters=''
+case "$*" in *chapters*) chapters=',"chapters":[{"start_time":"0.0","end_time":"5.0","tags":{"title":"One"}},` +
+	`{"start_time":"5.0","end_time":"10.0","tags":{"title":"Two"}}]';; esac
 echo '{"format":{"format_name":"mov","duration":"10.0","size":"100"},"streams":[` +
 	`{"index":0,"codec_type":"video","codec_name":"h264","width":640,"height":360},` +
-	`{"index":1,"codec_type":"audio","codec_name":"aac","channels":2}]}'
+	`{"index":1,"codec_type":"audio","codec_name":"aac","channels":2}]'"$chapters"'}'
 `
 
 // testFFmpeg lists encoders, fails inputs named fail, and writes the output otherwise.
@@ -257,5 +261,199 @@ func TestProgressPrinter(t *testing.T) {
 	want := "clip.mov:  42%  2.0x  libx264\nclip.mov: done -> /x/clip.mp4\nclip.mov: failed: boom\n"
 	if diff := cmp.Diff(want, buf.String()); diff != "" {
 		t.Errorf("mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// testSetFlags resets the config flags and sets each key to its value.
+func testSetFlags(t *testing.T, kv map[string]string) {
+	t.Helper()
+	config.Reset()
+	t.Cleanup(config.Reset)
+	for k, v := range kv {
+		f := config.Lookup(k)
+		if err := f.Value.Set(v); err != nil {
+			t.Fatal(err)
+		}
+		f.Changed = true
+	}
+}
+
+func TestSelectedPresetFlags(t *testing.T) { //nolint:paralleltest // Flags are process-wide.
+	webm, err := format.ContainerByID("webm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		Flags     map[string]string
+		Want      error
+		WantField func(preset.Preset) any
+		WantValue any
+	}{{ // Test 0: Container replaces a disallowed video codec.
+		Flags:     map[string]string{config.KeyPreset: "web", config.KeyContainer: "webm"},
+		WantField: func(p preset.Preset) any { return p.Video.Codec }, WantValue: webm.Video[0],
+	}, { // Test 1: Container replaces a disallowed audio codec.
+		Flags:     map[string]string{config.KeyPreset: "web", config.KeyContainer: "webm"},
+		WantField: func(p preset.Preset) any { return p.Audio.Codec }, WantValue: webm.Audio[0],
+	}, { // Test 2: Explicit video codec wins over the container replacement.
+		Flags: map[string]string{config.KeyPreset: "web", config.KeyContainer: "mkv",
+			config.KeyVideoCodec: "hevc"},
+		WantField: func(p preset.Preset) any { return p.Video.Codec }, WantValue: "hevc",
+	}, { // Test 3: Audio codec.
+		Flags:     map[string]string{config.KeyPreset: "web", config.KeyAudioCodec: "opus"},
+		WantField: func(p preset.Preset) any { return p.Audio.Codec }, WantValue: "opus",
+	}, { // Test 4: Audio none clears the codec.
+		Flags:     map[string]string{config.KeyPreset: "web", config.KeyAudioCodec: "none"},
+		WantField: func(p preset.Preset) any { return p.Audio.Codec }, WantValue: "",
+	}, { // Test 5: Resolution ID sets the fit box.
+		Flags:     map[string]string{config.KeyPreset: "web", config.KeyResolution: "720p"},
+		WantField: func(p preset.Preset) any { return [2]int{p.Video.MaxWidth, p.Video.MaxHeight} },
+		WantValue: [2]int{1280, 720},
+	}, { // Test 6: Resolution WxH sets the exact size.
+		Flags: map[string]string{config.KeyPreset: "web", config.KeyResolution: "1280x720"},
+		WantField: func(p preset.Preset) any {
+			return [4]int{p.Video.Width, p.Video.Height, p.Video.MaxWidth, p.Video.MaxHeight}
+		},
+		WantValue: [4]int{1280, 720, 0, 0},
+	}, { // Test 7: Resolution same clears the box.
+		Flags:     map[string]string{config.KeyPreset: "web", config.KeyResolution: "same"},
+		WantField: func(p preset.Preset) any { return [2]int{p.Video.MaxWidth, p.Video.MaxHeight} },
+		WantValue: [2]int{0, 0},
+	}, { // Test 8: Bad resolution.
+		Flags: map[string]string{config.KeyPreset: "web", config.KeyResolution: "huge"}, Want: errUsage,
+	}, { // Test 9: FPS.
+		Flags:     map[string]string{config.KeyPreset: "web", config.KeyFPS: "29.97"},
+		WantField: func(p preset.Preset) any { return p.Video.FPS }, WantValue: 29.97,
+	}, { // Test 10: Bad FPS.
+		Flags: map[string]string{config.KeyPreset: "web", config.KeyFPS: "fast"}, Want: errUsage,
+	}, { // Test 11: Video bitrate with suffix switches quality to vbr.
+		Flags:     map[string]string{config.KeyPreset: "web", config.KeyVideoBitrate: "5M"},
+		WantField: func(p preset.Preset) any { return []any{p.Video.Bitrate, p.Video.RateControl} },
+		WantValue: []any{5_000_000, format.RateVBR},
+	}, { // Test 12: Audio bitrate with k suffix.
+		Flags:     map[string]string{config.KeyPreset: "web", config.KeyAudioBitrate: "192k"},
+		WantField: func(p preset.Preset) any { return p.Audio.Bitrate }, WantValue: 192_000,
+	}, { // Test 13: Plain audio bitrate.
+		Flags:     map[string]string{config.KeyPreset: "web", config.KeyAudioBitrate: "128000"},
+		WantField: func(p preset.Preset) any { return p.Audio.Bitrate }, WantValue: 128_000,
+	}, { // Test 14: Bad bitrate.
+		Flags: map[string]string{config.KeyPreset: "web", config.KeyVideoBitrate: "lots"}, Want: errUsage,
+	}, { // Test 15: Negative control, odd dimension is refused by Validate.
+		Flags: map[string]string{config.KeyPreset: "web", config.KeyResolution: "1919x1080"},
+		Want:  format.ErrSetting,
+	}, { // Test 16: Unknown container is refused by Validate.
+		Flags: map[string]string{config.KeyPreset: "web", config.KeyContainer: "nope"},
+		Want:  preset.ErrInvalid,
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			testSetFlags(t, test.Flags)
+			p, err := selectedPreset()
+			if !errors.Is(err, test.Want) {
+				t.Fatalf("error = %v, want %v", err, test.Want)
+			}
+			if test.WantField == nil {
+				return
+			}
+			if diff := cmp.Diff(test.WantValue, test.WantField(p)); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestSelectedPresetCustom(t *testing.T) { //nolint:paralleltest // Flags are process-wide.
+	t.Setenv("HOME", t.TempDir())
+	store, err := preset.NewStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	custom, err := preset.Lookup("web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	custom.ID, custom.Name = "mine", "Mine"
+	if err := store.Save(custom); err != nil {
+		t.Fatal(err)
+	}
+	testSetFlags(t, map[string]string{config.KeyPreset: "mine"})
+	p, err := selectedPreset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ID != "mine" {
+		t.Errorf("preset = %q, want mine", p.ID)
+	}
+}
+
+func TestSelectedStreams(t *testing.T) { //nolint:paralleltest // Flags are process-wide.
+	tests := []struct {
+		Flags      map[string]string
+		Want       error
+		WantStream engine.Streams
+	}{{  // Test 0: No flags.
+	}, { // Test 1: All tracks.
+		Flags:      map[string]string{config.KeyAudioTracks: "all"},
+		WantStream: engine.Streams{AudioTracks: []int{engine.AllTracks}},
+	}, { // Test 2: Track list converts to zero-based positions.
+		Flags:      map[string]string{config.KeyAudioTracks: "1,3"},
+		WantStream: engine.Streams{AudioTracks: []int{0, 2}},
+	}, { // Test 3: Track zero.
+		Flags: map[string]string{config.KeyAudioTracks: "0"}, Want: errUsage,
+	}, { // Test 4: Track junk.
+		Flags: map[string]string{config.KeyAudioTracks: "x"}, Want: errUsage,
+	}, { // Test 5: Subtitles keep.
+		Flags:      map[string]string{config.KeySubtitles: "keep"},
+		WantStream: engine.Streams{Subtitles: engine.Subtitles{Mode: engine.SubtitlesKeep}},
+	}, { // Test 6: Subtitles none.
+		Flags:      map[string]string{config.KeySubtitles: "none"},
+		WantStream: engine.Streams{Subtitles: engine.Subtitles{Mode: engine.SubtitlesNone}},
+	}, { // Test 7: Subtitles burn.
+		Flags:      map[string]string{config.KeySubtitles: "burn"},
+		WantStream: engine.Streams{Subtitles: engine.Subtitles{Mode: engine.SubtitlesBurn}},
+	}, { // Test 8: Subtitle file path.
+		Flags: map[string]string{config.KeySubtitles: "/tmp/a.srt"},
+		WantStream: engine.Streams{Subtitles: engine.Subtitles{Mode: engine.SubtitlesKeep,
+			External: "/tmp/a.srt"}},
+	}, { // Test 9: Threads.
+		Flags: map[string]string{config.KeyThreads: "4"}, WantStream: engine.Streams{Threads: 4},
+	}, { // Test 10: Negative threads.
+		Flags: map[string]string{config.KeyThreads: "-1"}, Want: errUsage,
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			testSetFlags(t, test.Flags)
+			got, err := selectedStreams()
+			if !errors.Is(err, test.Want) {
+				t.Fatalf("error = %v, want %v", err, test.Want)
+			}
+			if diff := cmp.Diff(test.WantStream, got); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestJobFlags(t *testing.T) { //nolint:paralleltest // Flags are process-wide.
+	in := testInputs(t, "chapters.mov")
+	t.Setenv("HOME", t.TempDir())
+	out, err := testRun(t, "", "convert", "--preset", "web", "--split-chapters", "--passthrough",
+		in[0], "--out-dir", t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []queue.Status
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) == 0 || !got[0].Job.Passthrough {
+		t.Errorf("passthrough not set on job: %+v", got)
+	}
+	var names []string
+	for _, st := range got {
+		names = append(names, filepath.Base(st.Job.Output))
+	}
+	if diff := cmp.Diff([]string{"chapters - 01 One.mp4", "chapters - 02 Two.mp4"}, names); diff != "" {
+		t.Errorf("split chapters mismatch (-want +got):\n%s", diff)
 	}
 }

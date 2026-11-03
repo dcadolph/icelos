@@ -6,16 +6,28 @@ import "github.com/spf13/pflag"
 //
 //nolint:gochecknoglobals // Flag registry, written once at init.
 var flags = map[string]*pflag.Flag{
-	KeyPreset:    &FlagPreset,
-	KeySize:      &FlagSize,
-	KeyOutDir:    &FlagOutDir,
-	KeyOutput:    &FlagOutput,
-	KeyHardware:  &FlagHardware,
-	KeyOverwrite: &FlagOverwrite,
-	KeyWorkers:   &FlagWorkers,
-	KeyPretty:    &FlagPretty,
-	KeyFFmpeg:    &FlagFFmpeg,
-	KeyFFprobe:   &FlagFFprobe,
+	KeyPreset:        &FlagPreset,
+	KeySize:          &FlagSize,
+	KeyOutDir:        &FlagOutDir,
+	KeyOutput:        &FlagOutput,
+	KeyHardware:      &FlagHardware,
+	KeyOverwrite:     &FlagOverwrite,
+	KeyWorkers:       &FlagWorkers,
+	KeyPretty:        &FlagPretty,
+	KeyFFmpeg:        &FlagFFmpeg,
+	KeyFFprobe:       &FlagFFprobe,
+	KeyContainer:     &FlagContainer,
+	KeyVideoCodec:    &FlagVideoCodec,
+	KeyAudioCodec:    &FlagAudioCodec,
+	KeyResolution:    &FlagResolution,
+	KeyFPS:           &FlagFPS,
+	KeyVideoBitrate:  &FlagVideoBitrate,
+	KeyAudioBitrate:  &FlagAudioBitrate,
+	KeyAudioTracks:   &FlagAudioTracks,
+	KeySubtitles:     &FlagSubtitles,
+	KeyThreads:       &FlagThreads,
+	KeySplitChapters: &FlagSplitChapters,
+	KeyPassthrough:   &FlagPassthrough,
 }
 
 // Reset puts every flag back to its default. Tests use it between command runs because flag
