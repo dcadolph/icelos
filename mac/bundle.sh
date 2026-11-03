@@ -1,19 +1,68 @@
 #!/bin/sh
-# Assemble an unsigned Icelos.app for local runs in mac/.build/Icelos.app.
-# ffmpeg is not bundled yet, so the app uses the Homebrew copy.
+# Assemble an unsigned Icelos.app in mac/.build/Icelos.app.
+#
+# ICELOS_ARCHS lists the architectures to build (default "arm64 x86_64"). The Swift app and the
+# Go helper are built for each and joined into universal binaries. FFmpeg and ffprobe come from
+# mac/.build/ffmpeg/<arch>/bin (see build-ffmpeg.sh). When any listed arch lacks them, they are
+# left out and the app falls back to a Homebrew ffmpeg.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
 version="${ICELOS_VERSION:-dev}"
+archs="${ICELOS_ARCHS:-arm64 x86_64}"
 app="$here/.build/Icelos.app"
+helpers="$app/Contents/Helpers"
 
-swift build -c release --package-path "$here"
-bin="$(swift build -c release --package-path "$here" --show-bin-path)"
+swift_args="-c release --package-path $here"
+for a in $archs; do
+	swift_args="$swift_args --arch $a"
+done
+# shellcheck disable=SC2086 # Word splitting builds the argument list.
+swift build $swift_args
+# shellcheck disable=SC2086
+bin="$(swift build $swift_args --show-bin-path)"
 
 rm -rf "$app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" "$app/Contents/Resources"
+mkdir -p "$app/Contents/MacOS" "$helpers" "$app/Contents/Resources"
 cp "$bin/Icelos" "$app/Contents/MacOS/Icelos"
-(cd "$here/.." && go build -trimpath -ldflags "-s -w -X github.com/dcadolph/icelos/cmd.version=$version" \
-	-o "$app/Contents/Helpers/icelos" .)
+
+slices=""
+for a in $archs; do
+	case "$a" in
+	arm64) goarch=arm64 ;;
+	x86_64) goarch=amd64 ;;
+	*)
+		echo "bundle: unknown arch $a" >&2
+		exit 2
+		;;
+	esac
+	out="$here/.build/icelos-$a"
+	(cd "$here/.." && CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" go build -trimpath \
+		-ldflags "-s -w -X github.com/dcadolph/icelos/cmd.version=$version" -o "$out" .)
+	slices="$slices $out"
+done
+# shellcheck disable=SC2086
+lipo -create $slices -output "$helpers/icelos"
+
+have_ffmpeg=1
+for a in $archs; do
+	for tool in ffmpeg ffprobe; do
+		[ -x "$here/.build/ffmpeg/$a/bin/$tool" ] || have_ffmpeg=0
+	done
+done
+if [ "$have_ffmpeg" = 1 ]; then
+	for tool in ffmpeg ffprobe; do
+		tool_slices=""
+		for a in $archs; do
+			tool_slices="$tool_slices $here/.build/ffmpeg/$a/bin/$tool"
+		done
+		# shellcheck disable=SC2086
+		lipo -create $tool_slices -output "$helpers/$tool"
+	done
+	"$here/third-party.sh" "$version" >"$app/Contents/Resources/THIRD_PARTY.md"
+else
+	echo "bundle: no ffmpeg in mac/.build/ffmpeg for every arch in \"$archs\";" \
+		"leaving it out, the app will use a Homebrew ffmpeg" >&2
+fi
 
 # Build the app icon from assets/icon.png. The source is only read.
 iconset="$here/.build/Icelos.iconset"
