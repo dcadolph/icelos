@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -41,6 +43,8 @@ const (
 	OpProbe = "probe"
 	// OpAdd queues a conversion.
 	OpAdd = "add"
+	// OpPlan answers what an add request with the same fields would run, without queueing it.
+	OpPlan = "plan"
 	// OpCancel cancels Request.Job.
 	OpCancel = "cancel"
 	// OpList asks for every job.
@@ -86,6 +90,8 @@ type Request struct {
 	Output string `json:"output,omitempty"`
 	// Overwrite replaces an existing output.
 	Overwrite bool `json:"overwrite,omitempty"`
+	// Streams chooses the tracks, subtitles, chapters, metadata, and threads for add and plan.
+	Streams engine.Streams `json:"streams,omitzero"`
 	// Job is the job ID to cancel.
 	Job string `json:"job,omitempty"`
 }
@@ -113,6 +119,8 @@ type Message struct {
 	Catalog *Catalog `json:"catalog,omitempty"`
 	// Info is the probe result.
 	Info *probe.Info `json:"info,omitempty"`
+	// Plan is the answer to a plan request.
+	Plan *Plan `json:"plan,omitempty"`
 	// Status is one job snapshot.
 	Status *queue.Status `json:"status,omitempty"`
 	// Jobs lists every job.
@@ -128,6 +136,28 @@ type Catalog struct {
 	// Domains are the value lists the settings dialog offers.
 	Domains format.Domains `json:"domains"`
 }
+
+// Plan is what an add request would run.
+type Plan struct {
+	// Copy holds the passthrough verdict for each kind of output stream.
+	Copy engine.Copy `json:"copy"`
+	// Lossless is true when every output stream can pass through untouched.
+	Lossless bool `json:"lossless"`
+	// Output is the path the conversion would write.
+	Output string `json:"output"`
+	// Passes holds the ffmpeg arguments of each pass in run order, without the program name.
+	Passes [][]string `json:"passes"`
+	// Encoder is the video encoder, empty when video is copied or absent.
+	Encoder string `json:"encoder,omitempty"`
+	// Hardware is true when Encoder runs on the media engine.
+	Hardware bool `json:"hardware"`
+	// Filters lists the filters the plan needs that some ffmpeg builds lack.
+	Filters []string `json:"filters,omitempty"`
+}
+
+// planPassLog is the two-pass statistics path shown in plans. Real encodes use a fresh temporary
+// folder instead.
+var planPassLog = filepath.Join(os.TempDir(), "icelos-pass") //nolint:gochecknoglobals // Read-only.
 
 // CatalogCodec is one catalog codec and whether it can be encoded here.
 type CatalogCodec struct {
@@ -306,6 +336,22 @@ func (s *Server) handle(ctx context.Context, req Request, wg *sync.WaitGroup) {
 			}
 		}
 		s.send(m)
+	case OpPlan:
+		job, err := s.jobFor(req)
+		if err != nil {
+			s.fail(req.ID, err)
+			return
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p, err := s.plan(ctx, job, req.OutDir)
+			if err != nil {
+				s.fail(req.ID, err)
+				return
+			}
+			s.send(Message{Type: req.Op, Reply: req.ID, Plan: &p})
+		}()
 	case OpCancel:
 		if err := s.q.Cancel(req.Job); err != nil {
 			s.fail(req.ID, err)
@@ -355,9 +401,54 @@ func (s *Server) jobFor(req Request) (engine.Job, error) {
 	if p.ID == preset.TargetSizeID && p.TargetBytes == 0 {
 		return engine.Job{}, fmt.Errorf("%w: %s needs a size", ErrRequest, p.ID)
 	}
+	if err := req.Streams.Validate(); err != nil {
+		return engine.Job{}, err
+	}
 	hw := req.Hardware == nil || *req.Hardware
 	return engine.Job{Input: req.Input, Output: req.Output, Preset: p, Hardware: hw,
-		Overwrite: req.Overwrite}, nil
+		Overwrite: req.Overwrite, Streams: req.Streams}, nil
+}
+
+// plan probes job's input and external audio and returns what converting it would run. The
+// output path is the one add would pick now, with outDir as the folder when job has none.
+func (s *Server) plan(ctx context.Context, job engine.Job, outDir string) (Plan, error) {
+	in, err := filepath.Abs(job.Input)
+	if err != nil {
+		return Plan{}, fmt.Errorf("%w: %w", ErrRequest, err)
+	}
+	job.Input = in
+	info, err := s.cfg.Prober.Probe(ctx, job.Input)
+	if err != nil {
+		return Plan{}, err
+	}
+	extra := make([]probe.Info, 0, len(job.Streams.ExternalAudio))
+	for _, path := range job.Streams.ExternalAudio {
+		ext, err := s.cfg.Prober.Probe(ctx, path)
+		if err != nil {
+			return Plan{}, err
+		}
+		extra = append(extra, ext)
+	}
+	set, err := s.cfg.Encoders(ctx)
+	if err != nil {
+		return Plan{}, err
+	}
+	dest := job.Output
+	if dest == "" {
+		if dest, err = engine.OutputPath(job.Input, job.Preset.Ext(), outDir, nil); err != nil {
+			return Plan{}, err
+		}
+	}
+	c, err := engine.Copyable(job, info, set, extra...)
+	if err != nil {
+		return Plan{}, err
+	}
+	built, err := engine.Build(job, info, set, dest, planPassLog, extra...)
+	if err != nil {
+		return Plan{}, err
+	}
+	return Plan{Copy: c, Lossless: c.Lossless(), Output: dest, Passes: built.Passes,
+		Encoder: built.Encoder, Hardware: built.Hardware, Filters: built.Filters}, nil
 }
 
 // presetFor returns the inline preset of an add request after validating it, or else the named

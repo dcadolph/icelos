@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -78,10 +79,17 @@ func testSessionWith(t *testing.T, store *preset.Store) (*io.PipeWriter, *testOu
 		if strings.HasSuffix(path, "missing.mov") {
 			return probe.Info{}, probe.ErrProbe
 		}
-		return probe.Info{Format: "mov", Duration: time.Second}, nil
+		info := probe.Info{Format: "mov", Duration: time.Second, Streams: []probe.Stream{
+			{Index: 0, Kind: "video", Codec: "h264", Width: 1920, Height: 1080, AvgFrameRate: "30/1"},
+			{Index: 1, Kind: "audio", Codec: "aac", Channels: 2, SampleRate: 48000},
+		}}
+		if strings.HasSuffix(path, ".m4a") {
+			info.Streams = info.Streams[1:]
+		}
+		return info, nil
 	})
 	encoders := func(context.Context) (engine.EncoderSet, error) {
-		return engine.EncoderSet{"libx264": true, "hevc_videotoolbox": true, "png": true}, nil
+		return engine.EncoderSet{"libx264": true, "hevc_videotoolbox": true, "aac": true, "png": true}, nil
 	}
 	out := &testOutput{}
 	srv := New(out, Config{Encoder: enc, Prober: prober, Encoders: encoders, Presets: store,
@@ -197,7 +205,7 @@ func TestSession(t *testing.T) { //nolint:funlen // Test function.
 	if !strings.HasPrefix(bad.Error, "bad request") {
 		t.Errorf("bad json error = %q", bad.Error)
 	}
-	if c := waitFor(t, out, byReply("c")); !cmp.Equal(c.Encoders, []string{"hevc_videotoolbox", "libx264"}) {
+	if c := waitFor(t, out, byReply("c")); !cmp.Equal(c.Encoders, []string{"aac", "hevc_videotoolbox", "libx264"}) {
 		t.Errorf("encoders = %v", c.Encoders)
 	}
 	if p := waitFor(t, out, byReply("p")); len(p.Presets) == 0 {
@@ -237,6 +245,111 @@ func TestSession(t *testing.T) { //nolint:funlen // Test function.
 	testSend(t, in, `{"id":"cl","op":"clear"}`, `{"id":"l2","op":"list"}`)
 	if l := waitFor(t, out, byReply("l2")); len(l.Jobs) != 0 {
 		t.Errorf("after clear, list = %d jobs", len(l.Jobs))
+	}
+	if err := in.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Errorf("Run = %v", err)
+	}
+}
+
+func TestPlan(t *testing.T) { //nolint:funlen // Test function.
+	t.Parallel()
+	dir := t.TempDir()
+	clip, voice := filepath.Join(dir, "clip.mov"), filepath.Join(dir, "voice.m4a")
+	for _, p := range []string{clip, voice} {
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in, out, done := testSession(t)
+	small := `"presetBody":{"id":"small","name":"Small","container":"mp4",` +
+		`"video":{"codec":"h264","width":1280,"rateControl":"quality","quality":2},` +
+		`"audio":{"codec":"aac","bitrate":128000}}`
+	testSend(t, in,
+		`{"id":"p0","op":"plan","input":"`+clip+`","preset":"compatible","hardware":false}`,
+		`{"id":"p1","op":"plan","input":"`+clip+`",`+small+`}`,
+		`{"id":"p2","op":"plan","input":"`+clip+`","preset":"tiny"}`,
+		`{"id":"p3","op":"plan","input":"`+clip+`","preset":"web","streams":{"audioTracks":[-2]}}`,
+		`{"id":"p4","op":"plan","input":"`+filepath.Join(dir, "missing.mov")+`","preset":"web"}`,
+		`{"id":"p5","op":"plan","input":"`+clip+`","preset":"compatible","outDir":"`+dir+`",`+
+			`"streams":{"externalAudio":["`+voice+`"],"threads":2}}`,
+		`{"id":"p6","op":"plan","input":"`+voice+`","preset":"web"}`,
+		`{"id":"a0","op":"add","input":"`+clip+`","preset":"web","streams":{"threads":3,"dropChapters":true}}`,
+		`{"id":"a1","op":"add","input":"`+clip+`","preset":"web","streams":{"subtitles":{"mode":"wild"}}}`,
+		`{"id":"l","op":"list"}`,
+	)
+	verdict := func(v *engine.Verdict) string {
+		switch {
+		case v == nil:
+			return "none"
+		case v.Copy:
+			return "copy"
+		}
+		return v.Reason
+	}
+	tests := []struct {
+		Reply        string
+		WantError    string
+		WantVideo    string
+		WantAudio    string
+		WantEncoder  string
+		WantPasses   int
+		WantLossless bool
+		WantHardware bool
+	}{
+		{Reply: "p0", WantVideo: "copy", WantAudio: "copy", WantLossless: true, WantEncoder: "libx264",
+			WantPasses: 1}, // Test 0: Copyable source.
+		{Reply: "p1", WantVideo: engine.ReasonResize, WantAudio: "copy", WantEncoder: "libx264",
+			WantPasses: 1}, // Test 1: Resize rules video out.
+		{Reply: "p2", WantVideo: engine.ReasonCodec, WantAudio: "copy", WantEncoder: "hevc_videotoolbox",
+			WantHardware: true, WantPasses: 1}, // Test 2: Hardware HEVC.
+		{Reply: "p3", WantError: "stream selection invalid"}, // Test 3: Bad streams.
+		{Reply: "p4", WantError: "probe failed"},             // Test 4: Probe failure.
+		{Reply: "p5", WantVideo: "copy", WantAudio: "copy", WantLossless: true, WantEncoder: "libx264",
+			WantPasses: 1}, // Test 5: Probed external audio.
+		{Reply: "p6", WantError: "input has no video"}, // Test 6: Audio file, video preset.
+	}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			got := waitFor(t, out, byReply(test.Reply))
+			if test.WantError != "" {
+				if got.Type != TypeError || !strings.Contains(got.Error, test.WantError) {
+					t.Errorf("reply = %q %q, want error containing %q", got.Type, got.Error, test.WantError)
+				}
+				return
+			}
+			p := got.Plan
+			if got.Type != OpPlan || p == nil {
+				t.Fatalf("reply = %+v, want a plan", got)
+			}
+			if v, a := verdict(p.Copy.Video), verdict(p.Copy.Audio); v != test.WantVideo || a != test.WantAudio {
+				t.Errorf("verdicts = %s %s, want %s %s", v, a, test.WantVideo, test.WantAudio)
+			}
+			if p.Lossless != test.WantLossless || p.Encoder != test.WantEncoder ||
+				p.Hardware != test.WantHardware || len(p.Passes) != test.WantPasses {
+				t.Errorf("plan = %+v", p)
+			}
+		})
+	}
+	if p := waitFor(t, out, byReply("p0")).Plan; p == nil || p.Output != filepath.Join(dir, "clip.mp4") ||
+		!slices.Contains(p.Passes[0], clip) {
+		t.Errorf("plan output or input = %+v", p)
+	}
+	if p := waitFor(t, out, byReply("p5")).Plan; p == nil || !slices.Contains(p.Passes[0], voice) ||
+		!slices.Contains(p.Passes[0], "-threads") {
+		t.Errorf("plan with streams = %+v", p)
+	}
+	if a := waitFor(t, out, byReply("a0")); a.Status == nil || a.Status.Job.Streams.Threads != 3 ||
+		!a.Status.Job.Streams.DropChapters {
+		t.Errorf("add with streams = %+v", a.Status)
+	}
+	if a := waitFor(t, out, byReply("a1")); a.Type != TypeError || !strings.Contains(a.Error, "subtitle mode") {
+		t.Errorf("add with bad streams = %q %q", a.Type, a.Error)
+	}
+	if l := waitFor(t, out, byReply("l")); len(l.Jobs) != 1 {
+		t.Errorf("list = %d jobs, want 1: plan must not queue", len(l.Jobs))
 	}
 	if err := in.Close(); err != nil {
 		t.Fatal(err)
