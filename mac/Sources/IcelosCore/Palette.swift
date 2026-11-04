@@ -159,6 +159,15 @@ public struct Palette: Hashable, Sendable {
         accent.contrast(with: background) >= 4.5 ? accent : text
     }
 
+    /// systemAccent returns the app accent color for the appearance. bundle.sh carries the same two
+    /// values in the asset catalog it compiles for NSAccentColorName.
+    public static func systemAccent(dark: Bool) -> Swatch {
+        guard let swatch = Swatch(hex: dark ? "B08A32" : "8A6A1E") else {
+            preconditionFailure("Palette: bad system accent hex")
+        }
+        return swatch
+    }
+
     /// increasedContrast returns the palette for the system's increased contrast setting: muted text
     /// becomes the text color and borders rise to 35%.
     public var increasedContrast: Palette {

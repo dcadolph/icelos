@@ -77,6 +77,40 @@ done
 iconutil -c icns "$iconset" -o "$here/.build/Icelos.icns"
 cp "$here/.build/Icelos.icns" "$app/Contents/Resources/Icelos.icns"
 
+# Compile the app accent color into Assets.car. Palette.systemAccent holds the same two colors,
+# and PaletteTests keeps them in step. The first color is light, the second is dark.
+catalog="$here/.build/Assets.xcassets"
+rm -rf "$catalog"
+mkdir -p "$catalog/AccentColor.colorset"
+cat > "$catalog/Contents.json" <<JSON
+{"info":{"author":"xcode","version":1}}
+JSON
+cat > "$catalog/AccentColor.colorset/Contents.json" <<JSON
+{
+  "colors" : [
+    {
+      "color" : {
+        "color-space" : "srgb",
+        "components" : { "red" : "0x8A", "green" : "0x6A", "blue" : "0x1E", "alpha" : "1.000" }
+      },
+      "idiom" : "universal"
+    },
+    {
+      "appearances" : [ { "appearance" : "luminosity", "value" : "dark" } ],
+      "color" : {
+        "color-space" : "srgb",
+        "components" : { "red" : "0xB0", "green" : "0x8A", "blue" : "0x32", "alpha" : "1.000" }
+      },
+      "idiom" : "universal"
+    }
+  ],
+  "info" : { "author" : "xcode", "version" : 1 }
+}
+JSON
+xcrun actool "$catalog" --compile "$app/Contents/Resources" --platform macosx \
+	--minimum-deployment-target 14.0 --output-format human-readable-text \
+	--output-partial-info-plist "$here/.build/assets.plist"
+
 cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -92,6 +126,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 	<key>CFBundleVersion</key><string>${version#v}</string>
 	<key>LSMinimumSystemVersion</key><string>14.0</string>
 	<key>LSApplicationCategoryType</key><string>public.app-category.video</string>
+	<key>NSAccentColorName</key><string>AccentColor</string>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSHumanReadableCopyright</key><string>Free software under the GNU GPL v3 or later.</string>
 </dict>

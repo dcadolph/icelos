@@ -77,7 +77,6 @@ struct ThemeApplier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .environment(\.themeName, theme)
-            .tint(Theme.accent)
             .onChange(of: theme.forcedDark(appearance), initial: true) { _, dark in
                 NSApplication.shared.appearance = dark.map { NSAppearance(named: $0 ? .darkAqua : .aqua) } ?? nil
             }

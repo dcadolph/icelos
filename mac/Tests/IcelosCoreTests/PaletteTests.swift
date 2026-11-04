@@ -1,4 +1,6 @@
+import Foundation
 import Testing
+
 @testable import IcelosCore
 
 /// everyPalette lists each theme in each appearance it draws, labeled for failure messages.
@@ -126,4 +128,53 @@ let contrastRules: [ContrastRule] = [
             #expect(high.background == palette.background && high.accent == palette.accent, "\(label)")
         }
     }
+}
+
+/// bundleScript is the text of mac/bundle.sh, found from this file's path.
+private func bundleScript() throws -> String {
+    let url = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("bundle.sh")
+    return try String(contentsOf: url, encoding: .utf8)
+}
+
+/// hexComponents lists every quoted "0xNN" component in the text, in the order written.
+private func hexComponents(in text: String) -> [String] {
+    var found: [String] = []
+    var rest = Substring(text)
+    while let start = rest.range(of: "\"0x") {
+        let digits = rest[start.upperBound...].prefix(2)
+        let afterDigits = rest[start.upperBound...].dropFirst(2)
+        if digits.count == 2, digits.allSatisfy(\.isHexDigit), afterDigits.first == "\"" {
+            found.append("0x" + digits.uppercased())
+        }
+        rest = rest[start.upperBound...]
+    }
+    return found
+}
+
+/// assetComponents returns a swatch's red, green, and blue as the "0xNN" strings bundle.sh writes.
+private func assetComponents(_ swatch: Swatch) -> [String] {
+    [swatch.red, swatch.green, swatch.blue].map { String(format: "0x%02X", Int(($0 * 255).rounded())) }
+}
+
+@Test func systemAccentValues() {
+    #expect(Palette.systemAccent(dark: false) == Swatch(hex: "#8A6A1E"))
+    #expect(Palette.systemAccent(dark: true) == Swatch(hex: "#B08A32"))
+}
+
+@Test func systemAccentContrast() {
+    let dark = Palette.systemAccent(dark: true)
+    let light = Palette.systemAccent(dark: false)
+    #expect(Swatch.white.contrast(with: dark) >= 3.0, "dark accent with white is \(Swatch.white.contrast(with: dark))")
+    #expect(Swatch.white.contrast(with: light) >= 4.5, "light accent with white is \(Swatch.white.contrast(with: light))")
+}
+
+@Test func bundleScriptCarriesSystemAccent() throws {
+    let expected = assetComponents(Palette.systemAccent(dark: false)) + assetComponents(Palette.systemAccent(dark: true))
+    let written = hexComponents(in: try bundleScript())
+    let carried = written.indices.contains { start in
+        written.dropFirst(start).prefix(expected.count).elementsEqual(expected)
+    }
+    #expect(carried, "bundle.sh components \(written) do not hold \(expected) in order")
 }
