@@ -315,6 +315,10 @@ build_x265() {
 
 build_svt_av1() { cmake_build "$PWD" -DBUILD_APPS=OFF -DBUILD_TESTING=OFF; }
 
+# dav1d decodes AV1 in software. FFmpeg's own AV1 decoder needs a hardware decoder, which Macs
+# before the M3 lack.
+build_dav1d() { meson_build -Denable_tools=false -Denable_tests=false; }
+
 # build_ffmpeg configures FFmpeg twice out of tree: the full build installs the libraries and
 # ffmpeg, and a probe-only build makes an ffprobe without encoders, muxers, or filters, which it
 # never uses and which would otherwise double its size.
@@ -330,7 +334,7 @@ build_ffmpeg() {
 		--disable-doc --disable-debug --disable-ffplay --disable-autodetect
 		--enable-videotoolbox --enable-audiotoolbox --enable-zlib --enable-bzlib --enable-iconv
 		--enable-libvpx --enable-libopus --enable-libvorbis --enable-libopencore-amrnb
-		--enable-libopencore-amrwb --enable-libjxl)
+		--enable-libopencore-amrwb --enable-libjxl --enable-libdav1d)
 	mkdir -p build-full build-probe
 	(cd build-full && ../configure "${common[@]}" --disable-ffprobe \
 		--enable-libx264 --enable-libx265 --enable-libsvtav1 --enable-libmp3lame \

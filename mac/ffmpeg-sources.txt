@@ -20,4 +20,5 @@ libvpx	1.17.0	BSD-3-Clause	https://github.com/webmproject/libvpx/archive/refs/ta
 x264	0.165-b35605a	GPL-2.0-or-later	https://code.videolan.org/videolan/x264/-/archive/b35605ace3ddf7c1a5d67a2eb553f034aef41d55/x264-b35605ace3ddf7c1a5d67a2eb553f034aef41d55.tar.bz2	6eeb82934e69fd51e043bd8c5b0d152839638d1ce7aa4eea65a3fedcf83ff224
 x265	4.2	GPL-2.0-or-later	https://bitbucket.org/multicoreware/x265_git/downloads/x265_4.2.tar.gz	40b1ea0453e0309f0eba934e0ddf533f8f6295966679e8894e8f1c1c8d5e1210
 svt-av1	4.3.0	BSD-3-Clause-Clear	https://gitlab.com/AOMediaCodec/SVT-AV1/-/archive/v4.3.0/SVT-AV1-v4.3.0.tar.gz	95ce8fc2381ba707e65ac8b9b2e165915bfbe9cd4d2f7b0f58d64ce31bd98f6d
+dav1d	1.5.4	BSD-2-Clause	https://downloads.videolan.org/pub/videolan/dav1d/1.5.4/dav1d-1.5.4.tar.xz	686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5
 ffmpeg	9.0.2	GPL-3.0-or-later	https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz	8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
