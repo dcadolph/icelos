@@ -518,8 +518,6 @@ public struct Message: Codable, Sendable {
     public var encoders: [String]?
     /// presets lists the built-in presets, then the custom ones.
     public var presets: [Preset]?
-    /// recent lists recently used preset IDs, newest first.
-    public var recent: [String]?
     /// warning reports a problem that did not stop the request.
     public var warning: String?
     /// catalog is the format catalog.

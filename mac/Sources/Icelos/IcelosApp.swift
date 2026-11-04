@@ -34,7 +34,7 @@ struct IcelosApp: App {
                     .keyboardShortcut(AppCommand.addFiles.shortcut)
             }
             CommandGroup(replacing: .textEditing) {
-                Button("Search Formats") { session.window.searching = true }
+                Button("Search") { session.window.searching = true }
                     .keyboardShortcut(AppCommand.searchFormats.shortcut)
             }
             SidebarCommands()

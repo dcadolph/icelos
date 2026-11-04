@@ -630,10 +630,8 @@ private func planLine(_ id: UUID, seq: Int, lossless: Bool, copied: Bool, hardwa
         h.model.choose(.preset("gone"))
         #expect(h.model.presetID == "web")
 
-        h.model.handle(Message(type: "presets", reply: "presets", presets: h.model.presets, recent: ["web", "apple"]))
-        #expect(h.model.recent == ["web", "apple"])
-        #expect(h.model.targetSections()[0].targets.map(\.id) == ["recent:web", "recent:apple"])
-        #expect(h.model.targetSections(search: "zzz").allSatisfy { $0.targets.isEmpty })
+        #expect(h.model.targetSections().map(\.kind) == [.presets, .video, .audio, .custom])
+        #expect(h.model.targetSections(search: "zzz").allSatisfy { $0.isEmpty })
     }
 
     @Test func inlinePresetEncodesBackendKeys() throws {

@@ -112,8 +112,6 @@ public final class Converter {
     }
     /// presetError is the latest problem saving, deleting, or reading custom presets.
     public private(set) var presetError: String?
-    /// recent lists the preset IDs used last, newest first.
-    public private(set) var recent: [String] = []
     /// selection is the selected file, whose override the inspector edits when it has one.
     public var selection: UUID?
     /// hardware prefers the media engine.
@@ -205,7 +203,7 @@ public final class Converter {
 
     /// targetSections are the sidebar sections filtered by search.
     public func targetSections(search: String = "") -> [TargetSection] {
-        Targets.sections(presets: presets, recent: recent, catalog: catalog, search: search)
+        Targets.sections(presets: presets, catalog: catalog, search: search)
     }
 
     /// choose makes a sidebar target the window settings. Unavailable formats are ignored.
@@ -661,7 +659,6 @@ public final class Converter {
     /// that is gone falls back to the first preset; edited settings are left alone otherwise.
     private func applyPresets(_ m: Message) {
         presets = m.presets ?? []
-        recent = m.recent ?? recent
         presetError = m.warning
         if m.type == "preset.save", let id = savingID {
             savingID = nil

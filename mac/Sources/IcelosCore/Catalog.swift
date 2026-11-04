@@ -74,6 +74,9 @@ public struct Container: Codable, Hashable, Identifiable, Sendable {
     public var muxer: String
     /// kind is "video" or "audio".
     public var kind: String
+    /// common is true for the containers the apps list at the top level; the rest fold under More
+    /// Formats.
+    public var common: Bool?
     /// video lists allowed video codec IDs.
     public var video: [String]?
     /// audio lists allowed audio codec IDs.
@@ -192,6 +195,18 @@ public struct Catalog: Codable, Hashable, Sendable {
 
     /// audioContainers lists the audio-only containers.
     public var audioContainers: [Container] { containers.filter { $0.kind == "audio" } }
+
+    /// commonVideoContainers lists the video containers the sidebar shows at the top level.
+    public var commonVideoContainers: [Container] { videoContainers.filter { $0.common == true } }
+
+    /// moreVideoContainers lists the video containers folded under More Formats.
+    public var moreVideoContainers: [Container] { videoContainers.filter { $0.common != true } }
+
+    /// commonAudioContainers lists the audio containers the sidebar shows at the top level.
+    public var commonAudioContainers: [Container] { audioContainers.filter { $0.common == true } }
+
+    /// moreAudioContainers lists the audio containers folded under More Formats.
+    public var moreAudioContainers: [Container] { audioContainers.filter { $0.common != true } }
 
     /// codecs returns the codecs a container allows, in catalog order.
     public func codecs(for container: Container) -> [Codec] {

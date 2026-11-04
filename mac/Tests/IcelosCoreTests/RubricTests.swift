@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import SwiftUI
 import Testing
@@ -126,6 +127,32 @@ private func rubricCatalog() throws -> Catalog {
         let files = try sources()
         #expect(hits("Loading formats", in: files).isEmpty)
         #expect(hits("Open the settings with the gear", in: files).isEmpty)
+    }
+
+    // Rubric 22: every sidebar symbol and every symbol literal in Sources exists on this macOS.
+    @Test func symbolsResolve() throws {
+        let presets = try #require(try JSONDecoder().decode(Message.self, from: Data(presetsFixture.utf8)).presets)
+        let sidebar = Targets.allSymbols(presets: presets, catalog: try rubricCatalog())
+        let pattern = /(?:systemImage|systemName): "([^"]+)"/
+        let literals = try sources().flatMap { f in
+            f.lines.flatMap { line in line.matches(of: pattern).map { String($0.output.1) } }
+        }
+        #expect(!literals.isEmpty)
+        let missing = Set(sidebar + literals).filter {
+            NSImage(systemSymbolName: $0, accessibilityDescription: nil) == nil
+        }
+        #expect(missing.isEmpty, "\(missing.sorted())")
+    }
+
+    // Rubric 23: a sidebar row is one symbol and one name, with no caption and no painted color.
+    @Test func sidebarRowsAreNameAndSymbol() throws {
+        let fields = Mirror(reflecting: Target(id: "", pick: .preset(""), name: "", symbol: "", detail: "",
+                                               available: true)).children.compactMap(\.label)
+        #expect(fields == ["id", "pick", "name", "symbol", "detail", "available"])
+        let list = try #require(try sources("Icelos").first { $0.name == "TargetList.swift" })
+        let captions = list.lines.indices.filter { list.lines[$0].contains(/\bext\b/) }
+        #expect(captions.isEmpty, "TargetList.swift lines \(captions.map { $0 + 1 })")
+        #expect(hits("Theme.", in: [list]).isEmpty)
     }
 
     // Rubric 19: the inspector reaches every catalog domain and every control.

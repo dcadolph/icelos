@@ -16,8 +16,8 @@ struct ContentView: View {
         NavigationSplitView {
             TargetList(model: model, search: window.search)
                 .searchable(text: $window.search, isPresented: $window.searching, placement: .sidebar,
-                            prompt: "Search formats")
-                .navigationSplitViewColumnWidth(min: 220, ideal: 236, max: 320)
+                            prompt: "Search")
+                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 300)
         } detail: {
             VStack(spacing: 0) {
                 if let fault = model.fault { FaultBanner(text: fault) }
@@ -153,7 +153,6 @@ struct BottomBar: View {
                     .frame(minWidth: 96)
             }
             .buttonStyle(.borderedProminent)
-            .tint(Theme.accent)
             .disabled(model.pendingCount == 0 || model.settings == nil)
             .keyboardShortcut(AppCommand.convert.shortcut)
         }

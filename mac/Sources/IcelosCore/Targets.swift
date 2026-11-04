@@ -18,8 +18,6 @@ public struct Target: Identifiable, Hashable, Sendable {
     public var name: String
     /// symbol is the SF Symbol shown before the name.
     public var symbol: String
-    /// ext is the file extension written, without the dot.
-    public var ext: String
     /// detail describes the target for the hover text.
     public var detail: String
     /// available is false when this ffmpeg build cannot write the target.
@@ -30,8 +28,6 @@ public struct Target: Identifiable, Hashable, Sendable {
 public struct TargetSection: Identifiable, Hashable, Sendable {
     /// Kind names a sidebar section.
     public enum Kind: String, CaseIterable, Sendable {
-        /// recent holds the presets used last.
-        case recent
         /// presets holds the built-in presets.
         case presets
         /// video holds the video formats from the catalog.
@@ -44,7 +40,6 @@ public struct TargetSection: Identifiable, Hashable, Sendable {
         /// title is the section heading.
         public var title: String {
             switch self {
-            case .recent: "Recent"
             case .presets: "Presets"
             case .video: "Video"
             case .audio: "Audio"
@@ -55,39 +50,46 @@ public struct TargetSection: Identifiable, Hashable, Sendable {
 
     /// kind names the section.
     public var kind: Kind
-    /// targets are the rows in display order.
+    /// targets are the rows listed at the top level, in display order.
     public var targets: [Target]
+    /// more are the rows folded under More Formats, empty for Presets and Custom.
+    public var more: [Target] = []
 
     /// id identifies the section.
     public var id: Kind { kind }
     /// title is the section heading.
     public var title: String { kind.title }
+    /// isEmpty reports whether the section has no rows at either level.
+    public var isEmpty: Bool { targets.isEmpty && more.isEmpty }
 }
 
 /// Targets builds the sidebar sections from the presets and the catalog.
 public enum Targets {
-    /// recentLimit is the most presets the Recent section lists.
-    public static let recentLimit = 5
     /// unavailableHelp is the hover text on formats this ffmpeg build cannot write.
     public static let unavailableHelp = "Needs the bundled ffmpeg."
+    /// customSymbol is the symbol on every saved preset.
+    static let customSymbol = "slider.horizontal.3"
 
-    /// sections returns Recent, Presets, Video, Audio, and Custom in that order, each filtered by
-    /// search. A blank search keeps every row. Sections may be empty.
-    public static func sections(presets: [Preset], recent: [String], catalog: Catalog?,
-                                search: String = "") -> [TargetSection] {
-        let byID = Dictionary(presets.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let recents = recent.compactMap { byID[$0] }.prefix(recentLimit)
-        let all: [TargetSection.Kind: [Target]] = [
-            .recent: recents.map { target(for: $0, catalog: catalog, prefix: "recent") },
-            .presets: presets.filter { !$0.isCustom }.map { target(for: $0, catalog: catalog, prefix: "preset") },
-            .video: catalog.map { cat in cat.videoContainers.map { target(for: $0, catalog: cat) } } ?? [],
-            .audio: catalog.map { cat in cat.audioContainers.map { target(for: $0, catalog: cat) } } ?? [],
-            .custom: presets.filter(\.isCustom).map { target(for: $0, catalog: catalog, prefix: "preset") },
-        ]
+    /// sections returns Presets, Video, Audio, and Custom in that order, each filtered by search.
+    /// Video and Audio list the common formats and fold the rest into more. A blank search keeps
+    /// every row. Sections may be empty.
+    public static func sections(presets: [Preset], catalog: Catalog?, search: String = "") -> [TargetSection] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let keep = { (rows: [Target]) in query.isEmpty ? rows : rows.filter { matches($0, query) } }
+        let rows = { (cs: [Container], cat: Catalog) in cs.map { target(for: $0, catalog: cat) } }
         return TargetSection.Kind.allCases.map { kind in
-            let rows = all[kind] ?? []
-            return TargetSection(kind: kind, targets: query.isEmpty ? rows : rows.filter { matches($0, query) })
+            switch kind {
+            case .presets:
+                TargetSection(kind: kind, targets: keep(presets.filter { !$0.isCustom }.map(target(for:))))
+            case .video:
+                TargetSection(kind: kind, targets: keep(catalog.map { rows($0.commonVideoContainers, $0) } ?? []),
+                              more: keep(catalog.map { rows($0.moreVideoContainers, $0) } ?? []))
+            case .audio:
+                TargetSection(kind: kind, targets: keep(catalog.map { rows($0.commonAudioContainers, $0) } ?? []),
+                              more: keep(catalog.map { rows($0.moreAudioContainers, $0) } ?? []))
+            case .custom:
+                TargetSection(kind: kind, targets: keep(presets.filter(\.isCustom).map(target(for:))))
+            }
         }
     }
 
@@ -98,24 +100,24 @@ public enum Targets {
         return container.map { "container:" + $0 }
     }
 
-    /// matches reports whether a target's name, extension, or detail contains the query, ignoring
-    /// case and diacritics.
+    /// matches reports whether a target's name or detail contains the query, ignoring case and
+    /// diacritics.
     static func matches(_ t: Target, _ query: String) -> Bool {
-        [t.name, t.ext, t.detail].contains { $0.localizedStandardContains(query) }
+        [t.name, t.detail].contains { $0.localizedStandardContains(query) }
     }
 
     /// target makes the row for a preset.
-    static func target(for p: Preset, catalog: Catalog?, prefix: String) -> Target {
-        Target(id: prefix + ":" + p.id, pick: .preset(p.id), name: p.name,
-               symbol: p.isCustom ? "slider.horizontal.3" : symbol(forPreset: p.id), ext: p.ext,
-               detail: p.description, available: true)
+    static func target(for p: Preset) -> Target {
+        Target(id: "preset:" + p.id, pick: .preset(p.id), name: p.name,
+               symbol: p.isCustom ? customSymbol : symbol(forPreset: p.id), detail: p.description,
+               available: true)
     }
 
     /// target makes the row for a catalog container.
     static func target(for c: Container, catalog: Catalog) -> Target {
         let usable = catalog.isUsable(c)
         return Target(id: "container:" + c.id, pick: .container(c.id), name: c.name,
-                      symbol: c.kind == "video" ? "film" : "waveform", ext: c.ext,
+                      symbol: symbol(forContainer: c.id, kind: c.kind),
                       detail: usable ? catalog.summary(catalog.target(for: c)) : unavailableHelp,
                       available: usable)
     }
@@ -133,5 +135,38 @@ public enum Targets {
         case "mp3": "music.note"
         default: "film"
         }
+    }
+
+    /// symbol picks an SF Symbol for a container by the family it belongs to, so peers share one,
+    /// falling back to film or waveform by kind.
+    public static func symbol(forContainer id: String, kind: String) -> String {
+        switch id {
+        case "mp4", "mov", "m4v": "film"
+        case "mkv", "ogv": "film.stack"
+        case "webm": "globe"
+        case "avi", "wmv", "asf": "pc"
+        case "mpg", "vob", "m2ts": "opticaldisc"
+        case "ts", "trp": "antenna.radiowaves.left.and.right"
+        case "3gp", "3g2", "amr": "phone"
+        case "mxf": "movieclapper"
+        case "dv": "video"
+        case "flv", "f4v", "swf", "amv": "play.rectangle"
+        case "mp3", "m4a", "aac", "ogg", "opus", "wma", "mp2", "mka": "music.note"
+        case "wav", "aiff", "au", "caf", "flac", "alac": "waveform"
+        case "m4r": "bell"
+        case "m4b": "book.closed"
+        case "ac3": "hifispeaker"
+        default: kind == "audio" ? "waveform" : "film"
+        }
+    }
+
+    /// allSymbols lists every symbol the sidebar can draw for these presets and this catalog,
+    /// including the fallbacks, sorted and without repeats.
+    public static func allSymbols(presets: [Preset], catalog: Catalog?) -> [String] {
+        var out = Set(presets.map { target(for: $0).symbol })
+        out.formUnion([customSymbol, symbol(forPreset: ""), symbol(forContainer: "", kind: "video"),
+                       symbol(forContainer: "", kind: "audio")])
+        for c in catalog?.containers ?? [] { out.insert(symbol(forContainer: c.id, kind: c.kind)) }
+        return out.sorted()
     }
 }
