@@ -198,6 +198,22 @@ func TestBuild(t *testing.T) { //nolint:funlen // Test function.
 		WantPasses: [][]string{slices.Concat(head, []string{"-map", "0:0", "-c:v", "copy",
 			"-map", "0:1", "-c:a", "copy",
 			"-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"})},
+	}, { // Test 22: Target size spreads over the streams' playing time, not a longer container.
+		Preset: preset.TargetSizeID, TargetBytes: 10_000_000, WantEncoder: "libx264",
+		Info: func(i probe.Info) probe.Info {
+			i.Duration = 20 * time.Second
+			i.Streams[0].Duration, i.Streams[1].Tags.Duration = "10.000000", "00:00:10.000000000"
+			return i
+		},
+		WantPasses: [][]string{
+			slices.Concat(head, []string{"-map", "0:0", "-c:v", "libx264", "-preset", "medium",
+				"-vf", "scale=1920:1080", "-pix_fmt", "yuv420p", "-b:v", "7632000",
+				"-pass", "1", "-passlogfile", "plog", "-an", "-f", "null", os.DevNull}),
+			slices.Concat(head, []string{"-map", "0:0", "-c:v", "libx264", "-preset", "medium",
+				"-vf", "scale=1920:1080", "-pix_fmt", "yuv420p", "-b:v", "7632000",
+				"-pass", "2", "-passlogfile", "plog", "-map", "0:1", "-c:a", "aac_at",
+				"-b:a", "128000", "-ac", "2", "-map_metadata", "0", "-movflags", "+faststart", "-f", "mp4", "out.mp4"}),
+		},
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {

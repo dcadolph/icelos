@@ -283,7 +283,7 @@ func keptRatio(t *testing.T, bytes int64, info probe.Info, tg format.Target) flo
 	if !ok || !vok {
 		t.Fatal("calibration clip has no source bitrate or video")
 	}
-	seconds := float64(info.Duration) / 1e9
+	seconds := float64(info.MediaDuration()) / 1e9
 	bits := float64(bytes)*8/seconds/estimateOverhead - estimateAudio(info, tg.Audio)
 	return bits / src / areaScale(video, tg.Video)
 }
@@ -400,6 +400,63 @@ func TestEstimateEncoderRatios(t *testing.T) {
 			}
 			if diff := cmp.Diff(test.WantEqual, a == b); diff != "" {
 				t.Errorf("equal mismatch (-want +got):\n%s\n%+v against %+v", diff, a, b)
+			}
+		})
+	}
+}
+
+// chapteredClip returns the probe of sintel-h264-ac3-5.1-subs-chapters.mkv from the corpus as
+// ffprobe reports it: subtitle tracks stretch the container to 4.05 s while the picture and
+// sound play about 2 s, and only the AC-3 track carries a bitrate.
+func chapteredClip() probe.Info {
+	return probe.Info{Format: "matroska,webm", Duration: 4050 * time.Millisecond, Size: 171_043,
+		Streams: []probe.Stream{
+			{Index: 0, Kind: "video", Codec: "h264", Width: 1126, Height: 480,
+				Tags: probe.Tags{Duration: "00:00:02.000000000"}},
+			{Index: 1, Kind: "audio", Codec: "ac3", Channels: 6, Bitrate: 640_000,
+				Tags: probe.Tags{Duration: "00:00:02.028000000"}},
+			{Index: 2, Kind: "subtitle", Codec: "subrip", Tags: probe.Tags{Duration: "00:00:04.050000000"}},
+		}}
+}
+
+// TestEstimateProbedStreams checks that probed stream bitrates and playing times feed the
+// formula in place of the assumed audio bitrate and the container duration.
+func TestEstimateProbedStreams(t *testing.T) {
+	t.Parallel()
+	copyAudio := format.Target{
+		Video: format.Video{Codec: "h264", RateControl: format.RateCBR, Bitrate: 2_000_000},
+		Audio: format.Audio{Codec: format.Copy},
+	}
+	ac3 := estimateClip(10*time.Second, 5_000_000)
+	ac3.Streams[1].Codec, ac3.Streams[1].Bitrate = "ac3", 448_000
+	probedVideo := estimateClip(10*time.Second, 5_000_000)
+	probedVideo.Streams[0].Bitrate = 1_000_000
+	point := func(bps, seconds float64) estimateWant {
+		n := int64(math.Round(bps * seconds / 8 * estimateOverhead))
+		return estimateWant{Low: n, High: n, OK: true}
+	}
+	tests := []struct {
+		Info     probe.Info
+		Target   format.Target
+		WantSize estimateWant
+	}{{ // Test 0: A copied AC-3 track counts at its probed 448 kb/s.
+		Info: ac3, Target: copyAudio, WantSize: point(2_000_000+448_000, 10),
+	}, { // Test 1: A copied track without a probed bitrate counts at the assumed rate.
+		Info: estimateClip(10*time.Second, 5_000_000), Target: copyAudio,
+		WantSize: point(2_000_000+assumedAudioBitrate, 10),
+	}, { // Test 2: The chaptered mkv's audio spreads over 2.028 s, not the 4.05 s container.
+		Info: chapteredClip(), Target: builtinTarget(t, "audio"), WantSize: point(192_000, 2.028),
+	}, { // Test 3: A copied video stream counts at its probed bitrate.
+		Info: probedVideo, Target: format.Target{Video: format.Video{Codec: format.Copy},
+			Audio: format.Audio{Codec: "aac", Bitrate: 128_000}},
+		WantSize: point(1_000_000+128_000, 10),
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			r, ok := Estimate(test.Info, test.Target, "")
+			if diff := cmp.Diff(test.WantSize, estimateWant{Low: r.Low, High: r.High, OK: ok}); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}

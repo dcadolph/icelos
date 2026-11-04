@@ -192,7 +192,7 @@ func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //n
 	}
 
 	audioBps := p.Audio.Bitrate * len(lay.Audio)
-	span := job.Range.Span(info.Duration)
+	span := job.Range.Span(info.MediaDuration())
 	if p.TargetBytes > 0 {
 		if spec.Bitrate, err = TargetVideoBitrate(p.TargetBytes, span, audioBps); err != nil {
 			return Plan{}, err

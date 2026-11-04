@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/dcadolph/icelos/internal/util/tooltest"
 )
@@ -64,6 +65,15 @@ func TestParse(t *testing.T) {
 		In: `{"chapters":[{"start_time":"soon","end_time":"1.0"}]}`, Want: ErrProbe,
 	}, { // Test 8: A chapter end that is not a number.
 		In: `{"chapters":[{"start_time":"0.0","end_time":"later"}]}`, Want: ErrProbe,
+	}, { // Test 9: Stream bitrates, durations, and the Matroska duration tag.
+		In: `{"streams":[{"index":0,"codec_type":"video","bit_rate":"451019","duration":"2.125000"},` +
+			`{"index":1,"codec_type":"audio","bit_rate":"640000","tags":{"DURATION":"00:00:02.028000000"}}]}`,
+		WantInfo: Info{Streams: []Stream{
+			{Index: 0, Kind: "video", Bitrate: 451_019, Duration: "2.125000"},
+			{Index: 1, Kind: "audio", Bitrate: 640_000, Tags: Tags{Duration: "00:00:02.028000000"}},
+		}},
+	}, { // Test 10: A bitrate that is not a number.
+		In: `{"streams":[{"index":0,"codec_type":"audio","bit_rate":"fast"}]}`, Want: ErrProbe,
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
@@ -132,6 +142,53 @@ func TestStreamHelpers(t *testing.T) {
 			w, h := v.DisplaySize()
 			if diff := cmp.Diff([2]int{test.WantWidth, test.WantHeight}, [2]int{w, h}); diff != "" {
 				t.Errorf("size mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestMediaDuration(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		In           string
+		WantDuration time.Duration
+	}{{ // Test 0: MP4 streams carry durations and the longest wins.
+		In: `{"format":{"duration":"2.015333"},"streams":[{"codec_type":"video","duration":"2.000000"},` +
+			`{"codec_type":"audio","duration":"2.015333"}]}`,
+		WantDuration: 2015333 * time.Microsecond,
+	}, { // Test 1: The chaptered mkv, whose subtitles stretch the container to 4.05 s.
+		In: `{"format":{"duration":"4.050000"},"streams":[` +
+			`{"codec_type":"video","tags":{"DURATION":"00:00:02.000000000"}},` +
+			`{"codec_type":"audio","tags":{"DURATION":"00:00:02.028000000"}},` +
+			`{"codec_type":"subtitle","tags":{"DURATION":"00:00:04.050000000"}}]}`,
+		WantDuration: 2028 * time.Millisecond,
+	}, { // Test 2: No stream records a duration, so the container's stands.
+		In:           `{"format":{"duration":"12.5"},"streams":[{"codec_type":"video"},{"codec_type":"audio"}]}`,
+		WantDuration: 12500 * time.Millisecond,
+	}, { // Test 3: Cover art does not count as playing video.
+		In: `{"format":{"duration":"3.0"},"streams":[{"codec_type":"audio","duration":"3.000000"},` +
+			`{"codec_type":"video","duration":"90.0","disposition":{"attached_pic":1}}]}`,
+		WantDuration: 3 * time.Second,
+	}, { // Test 4: Durations that do not parse fall back to the container.
+		In: `{"format":{"duration":"5.0"},"streams":[{"codec_type":"video","duration":"soon"},` +
+			`{"codec_type":"audio","tags":{"DURATION":"2.5"}},{"codec_type":"audio","tags":{"DURATION":"x:00:01"}},` +
+			`{"codec_type":"audio","tags":{"DURATION":"00:-1:01"}}]}`,
+		WantDuration: 5 * time.Second,
+	}, { // Test 5: Hours and minutes in a duration tag.
+		In:           `{"streams":[{"codec_type":"audio","tags":{"DURATION":"01:02:03.500000000"}}]}`,
+		WantDuration: time.Hour + 2*time.Minute + 3500*time.Millisecond,
+	}, { // Test 6: Nothing records a duration.
+		In: `{}`,
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			info, err := Parse([]byte(test.In))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if diff := cmp.Diff(test.WantDuration, info.MediaDuration()); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -225,7 +282,11 @@ func TestRunChaptersAndTags(t *testing.T) {
 		t.Errorf("chapters mismatch (-want +got):\n%s", diff)
 	}
 	a, _ := info.FirstAudio()
-	if diff := cmp.Diff(Tags{Language: "fra", Title: "Commentary"}, a.Tags); diff != "" {
+	if diff := cmp.Diff(Tags{Language: "fra", Title: "Commentary"}, a.Tags,
+		cmpopts.IgnoreFields(Tags{}, "Duration")); diff != "" {
 		t.Errorf("tags mismatch (-want +got):\n%s", diff)
+	}
+	if d := info.MediaDuration(); a.Tags.Duration == "" || d < 1950*time.Millisecond || d > 2050*time.Millisecond {
+		t.Errorf("media duration = %s from tag %q, want about 2s", d, a.Tags.Duration)
 	}
 }

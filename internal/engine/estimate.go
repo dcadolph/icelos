@@ -14,7 +14,8 @@ import (
 var ( //nolint:gochecknoglobals // Read-only model data.
 	// estimateOverhead is the container's share on top of the streams.
 	estimateOverhead = 1.01
-	// assumedAudioBitrate stands in for a source audio stream, whose bitrate the probe omits.
+	// assumedAudioBitrate stands in for a source audio stream whose container records no
+	// bitrate.
 	assumedAudioBitrate = 160_000.0
 	// estimateSampleRate is the sample rate assumed for uncompressed audio when none is set.
 	estimateSampleRate = 48_000.0
@@ -103,10 +104,11 @@ func Estimate(info probe.Info, t format.Target, encoder string) (SizeRange, bool
 	if t.Video.RateControl == format.RateTwoPass && t.Video.Bitrate == 0 {
 		return SizeRange{Low: t.TargetBytes, High: t.TargetBytes}, t.TargetBytes != 0
 	}
-	if info.Duration <= 0 {
+	dur := info.MediaDuration()
+	if dur <= 0 {
 		return SizeRange{}, false
 	}
-	seconds := float64(info.Duration) / 1e9
+	seconds := float64(dur) / 1e9
 	video, ok := estimateVideo(info, t.Video, encoder)
 	if !ok {
 		return SizeRange{}, false
@@ -151,13 +153,17 @@ func estimateVideo(info probe.Info, v format.Video, encoder string) (ratio, bool
 	return table[level-1].scaled(srcVideo * areaScale(src, v)), true
 }
 
-// sourceVideoBitrate returns the overall source bitrate less an assumed audio share, and false
-// when the size or duration is unknown.
+// sourceVideoBitrate returns the first video stream's probed bitrate, else the overall source
+// bitrate less an assumed audio share, and false when neither is known.
 func sourceVideoBitrate(info probe.Info) (float64, bool) {
-	if info.Size <= 0 || info.Duration <= 0 {
+	if v, ok := info.FirstVideo(); ok && v.Bitrate > 0 {
+		return float64(v.Bitrate), true
+	}
+	dur := info.MediaDuration()
+	if info.Size <= 0 || dur <= 0 {
 		return 0, false
 	}
-	total := float64(info.Size) * 8 / (float64(info.Duration) / 1e9)
+	total := float64(info.Size) * 8 / (float64(dur) / 1e9)
 	if _, ok := info.FirstAudio(); ok {
 		return total - min(assumedAudioBitrate, total/2), true
 	}
@@ -200,6 +206,9 @@ func estimateAudio(info probe.Info, a format.Audio) float64 {
 		return 0
 	}
 	if a.Codec == format.Copy {
+		if src.Bitrate > 0 {
+			return float64(src.Bitrate)
+		}
 		return assumedAudioBitrate
 	}
 	channels := src.Channels

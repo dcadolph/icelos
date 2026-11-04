@@ -208,7 +208,7 @@ func (f *FFmpeg) Encode(ctx context.Context, job Job, report ReportFunc) error {
 	if err := f.checkFilters(ctx, plan.Filters); err != nil {
 		return err
 	}
-	span := job.Range.Span(info.Duration)
+	span := job.Range.Span(info.MediaDuration())
 	err = f.run(ctx, plan, 0, span, report)
 	if err != nil && plan.Hardware && ctx.Err() == nil {
 		job.Hardware = false

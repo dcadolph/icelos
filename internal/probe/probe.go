@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -37,6 +38,11 @@ type Stream struct {
 	BaseFrameRate string `json:"r_frame_rate,omitempty"`
 	// BFrames is how many frames the decoder holds back to reorder B-frames, zero without them.
 	BFrames int `json:"has_b_frames,omitempty"`
+	// Bitrate is the stream's bits per second where the container records it, zero otherwise.
+	Bitrate int `json:"bit_rate,string,omitempty"`
+	// Duration is the stream's playing time in seconds as a decimal string, empty when the
+	// container records none, as Matroska does.
+	Duration string `json:"duration,omitempty"`
 	// Disposition carries the stream role flags.
 	Disposition Disposition `json:"disposition"`
 	// Tags carries the stream's language and title.
@@ -51,12 +57,16 @@ type Disposition struct {
 	AttachedPic int `json:"attached_pic"`
 }
 
-// Tags holds the stream tags icelos shows when choosing tracks.
+// Tags holds the stream tags icelos reads: the language and title shown when choosing tracks,
+// and the duration Matroska records in place of a stream duration.
 type Tags struct {
 	// Language is the ISO 639-2 language code, such as "eng", empty when untagged.
 	Language string `json:"language,omitempty"`
 	// Title is the track name the file gives, empty when untagged.
 	Title string `json:"title,omitempty"`
+	// Duration is the stream's playing time as hours, minutes, and seconds, such as
+	// "00:00:02.028000000", empty when untagged.
+	Duration string `json:"DURATION,omitempty"`
 }
 
 // SideData is one ffprobe side data entry.
@@ -108,6 +118,53 @@ func parseRate(r string) float64 {
 		return 0
 	}
 	return n / d
+}
+
+// playTime returns the stream's playing time from its duration or its Matroska duration tag,
+// and zero when it records neither in a form that parses.
+func (s Stream) playTime() time.Duration {
+	if d, err := seconds(s.Duration); err == nil && d > 0 {
+		return d
+	}
+	return clock(s.Tags.Duration)
+}
+
+// clock parses an hours, minutes, and seconds time such as "00:00:02.028000000", returning zero
+// for anything else.
+func clock(s string) time.Duration {
+	h, rest, ok := strings.Cut(s, ":")
+	if !ok {
+		return 0
+	}
+	m, sec, ok := strings.Cut(rest, ":")
+	if !ok {
+		return 0
+	}
+	hours, herr := strconv.Atoi(h)
+	mins, merr := strconv.Atoi(m)
+	secs, serr := strconv.ParseFloat(sec, 64)
+	if herr != nil || merr != nil || serr != nil || hours < 0 || mins < 0 || secs < 0 {
+		return 0
+	}
+	return time.Duration(hours)*time.Hour + time.Duration(mins)*time.Minute +
+		time.Duration(math.Round(secs*float64(time.Second)))
+}
+
+// MediaDuration returns the longest playing time among the motion video and audio streams, the
+// span a bitrate spreads over. A subtitle track can run past the picture and sound and stretch
+// the container's duration, so the container value is used only when no video or audio stream
+// records one.
+func (i Info) MediaDuration() time.Duration {
+	var longest time.Duration
+	for _, s := range i.Streams {
+		if (s.Kind == "video" && !s.IsCover()) || s.Kind == "audio" {
+			longest = max(longest, s.playTime())
+		}
+	}
+	if longest > 0 {
+		return longest
+	}
+	return i.Duration
 }
 
 // FirstVideo returns the first motion video stream.
