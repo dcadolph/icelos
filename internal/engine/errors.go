@@ -36,4 +36,6 @@ var (
 	ErrTargetMissed = errors.New("target size missed")
 	// ErrCopy is returned when a target copies a stream that cannot pass through untouched.
 	ErrCopy = errors.New("stream cannot be copied")
+	// ErrThumbnail is returned when a thumbnail cannot be made or stored.
+	ErrThumbnail = errors.New("thumbnail failed")
 )
