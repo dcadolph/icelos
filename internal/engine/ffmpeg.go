@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/dcadolph/icelos/internal/probe"
 	"github.com/dcadolph/icelos/internal/progress"
+	"github.com/dcadolph/icelos/internal/util/proc"
 )
 
 // Process limits and the trial encode source.
@@ -70,7 +70,7 @@ func (f *FFmpeg) Encoders(ctx context.Context) (EncoderSet, error) {
 	if f.avail != nil {
 		return f.avail, nil
 	}
-	out, err := exec.CommandContext(ctx, f.bin, "-hide_banner", "-encoders").Output()
+	out, err := proc.Command(ctx, f.bin, "-hide_banner", "-encoders").Output()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -101,7 +101,7 @@ func (f *FFmpeg) trial(ctx context.Context, set EncoderSet) error {
 	slices.Sort(names)
 	for _, name := range names {
 		tctx, cancel := context.WithTimeout(ctx, trialTimeout)
-		err := exec.CommandContext(tctx, f.bin, "-hide_banner", "-nostdin", "-loglevel", "error",
+		err := proc.Command(tctx, f.bin, "-hide_banner", "-nostdin", "-loglevel", "error",
 			"-f", "lavfi", "-i", trialSource, "-c:v", name, "-f", "null", "-").Run()
 		cancel()
 		if ctx.Err() != nil {
@@ -121,7 +121,7 @@ func (f *FFmpeg) Filters(ctx context.Context) (FilterSet, error) {
 	if f.filters != nil {
 		return f.filters, nil
 	}
-	out, err := exec.CommandContext(ctx, f.bin, "-hide_banner", "-filters").Output()
+	out, err := proc.Command(ctx, f.bin, "-hide_banner", "-filters").Output()
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
@@ -304,7 +304,7 @@ func (f *FFmpeg) run(ctx context.Context, plan Plan, from int, dur time.Duration
 
 // pass runs ffmpeg once with args and feeds its progress stream to fn.
 func (f *FFmpeg) pass(ctx context.Context, args []string, fn func(progress.Update)) error {
-	cmd := exec.CommandContext(ctx, f.bin, args...)
+	cmd := proc.Command(ctx, f.bin, args...)
 	cmd.WaitDelay = 5 * time.Second
 	tail := &tailBuffer{max: stderrTail}
 	cmd.Stderr = tail

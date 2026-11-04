@@ -6,11 +6,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dcadolph/icelos/internal/util/proc"
 )
 
 // Thumbnail defaults, the same as the Mac app's: the row tile at twice its 96 by 54 point
@@ -85,7 +86,7 @@ func (f *FFmpeg) Thumbnail(ctx context.Context, dir string, r ThumbnailRequest) 
 	defer func() { _ = os.Remove(partial) }()
 	box := "scale=w='min(iw," + strconv.Itoa(r.Width) + ")':h='min(ih," + strconv.Itoa(r.Height) +
 		")':force_original_aspect_ratio=decrease"
-	cmd := exec.CommandContext(ctx, f.bin, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+	cmd := proc.Command(ctx, f.bin, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
 		"-ss", seconds(r.At), "-i", src, "-frames:v", "1", "-vf", box, "-f", "image2", partial)
 	tail := &tailBuffer{max: stderrTail}
 	cmd.Stderr = tail

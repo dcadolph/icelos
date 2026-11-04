@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/dcadolph/icelos/internal/util/proc"
 )
 
 // Stream describes one stream inside a media file.
@@ -245,7 +247,7 @@ func File(ctx context.Context, path string) (Info, error) {
 
 // Run runs the ffprobe binary at bin against path and returns the parsed metadata.
 func Run(ctx context.Context, bin, path string) (Info, error) {
-	cmd := exec.CommandContext(ctx, bin, "-v", "error", "-print_format", "json",
+	cmd := proc.Command(ctx, bin, "-v", "error", "-print_format", "json",
 		"-show_format", "-show_streams", "-show_chapters", "-i", path)
 	out, err := cmd.Output()
 	if err != nil {
