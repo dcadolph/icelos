@@ -138,6 +138,17 @@ private func rubricCatalog() throws -> Catalog {
         #expect(hits("Open the settings with the gear", in: files).isEmpty)
     }
 
+    // Rubric 21: the chrome is the system's. Only the theme, the content pane, and the file list
+    // read a palette slot.
+    @Test func chromeNeverReadsThePalette() throws {
+        let files = try sources("Icelos")
+        let allowed: Set<String> = ["Theme.swift", "ContentPane.swift", "JobList.swift"]
+        let found = hits("Theme.", in: files) + hits("ThemeColor", in: files)
+        #expect(!found.isEmpty)
+        let outside = found.filter { !allowed.contains(String($0.prefix { $0 != ":" })) }
+        #expect(outside.isEmpty, "\(outside)")
+    }
+
     // Rubric 22: every sidebar symbol and every symbol literal in Sources exists on this macOS.
     @Test func symbolsResolve() throws {
         let presets = try #require(try JSONDecoder().decode(Message.self, from: Data(presetsFixture.utf8)).presets)

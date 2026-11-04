@@ -85,7 +85,7 @@ struct DestinationMenu: View {
         }
         .help("Where converted files go.")
         .accessibilityLabel("Destination")
-        .accessibilityValue(model.outputFolder?.lastPathComponent ?? "Next to originals")
+        .accessibilityValue(model.outputFolder?.lastPathComponent ?? "Next to Originals")
     }
 }
 
@@ -98,7 +98,6 @@ struct EngineToggle: View {
         Toggle(isOn: $model.hardware) {
             Label(model.hasHardware ? "Media Engine" : "Software",
                   systemImage: model.hasHardware && model.hardware ? "bolt.fill" : "cpu")
-                .labelStyle(.titleAndIcon)
         }
         .toggleStyle(.button)
         .disabled(!model.hasHardware || blocked)
@@ -122,12 +121,22 @@ struct EngineToggle: View {
     }
 }
 
-/// BottomBar summarizes the run and holds Convert.
+/// BottomBar summarizes the run and holds Convert, on the bar material under a divider like a
+/// Finder status bar.
 struct BottomBar: View {
     /// model is the window state.
     @Bindable var model: Converter
 
     var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+            bar
+        }
+        .background(.bar)
+    }
+
+    /// bar is the summary, Clear Finished, and Convert.
+    private var bar: some View {
         HStack(spacing: 12) {
             summary
             Spacer()
@@ -148,7 +157,7 @@ struct BottomBar: View {
         }
         .controlSize(.large)
         .padding(.horizontal, 20)
-        .padding(.vertical, 14)
+        .padding(.vertical, 12)
     }
 
     /// summary shows overall progress while busy, then the space saved, else what is ready.
@@ -156,14 +165,14 @@ struct BottomBar: View {
         if let progress = model.overallProgress {
             HStack(spacing: 10) {
                 ProgressView(value: progress).frame(width: 140)
-                Text("\(Int(progress * 100))%").monospacedDigit().foregroundStyle(Theme.muted)
+                Text("\(Int(progress * 100))%").monospacedDigit().foregroundStyle(.secondary)
             }
         } else if model.savedBytes > 0 {
             Label("Saved \(Format.bytes(model.savedBytes))", systemImage: "leaf.fill")
-                .foregroundStyle(Theme.success)
+                .foregroundStyle(.green)
         } else if model.pendingCount > 0 {
             Text(model.pendingCount == 1 ? "1 file ready" : "\(model.pendingCount) files ready")
-                .foregroundStyle(Theme.muted)
+                .foregroundStyle(.secondary)
         }
     }
 }
@@ -178,8 +187,8 @@ struct FaultBanner: View {
             .font(.callout)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.danger.opacity(0.18)))
-            .foregroundStyle(Theme.danger)
+            .background(RoundedRectangle(cornerRadius: 8).fill(.red.opacity(0.15)))
+            .foregroundStyle(.red)
             .padding(.horizontal, 20)
             .padding(.top, 12)
             .textSelection(.enabled)

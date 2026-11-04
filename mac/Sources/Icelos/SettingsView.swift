@@ -2,7 +2,8 @@ import AppKit
 import IcelosCore
 import SwiftUI
 
-/// SettingsView is the Settings window content with the Look and Output tabs.
+/// SettingsView is the Settings window content with the General and Appearance tabs, each a
+/// grouped form in the system style.
 struct SettingsView: View {
     /// theme is the stored theme choice.
     @AppStorage(AppSettings.Key.theme) private var theme = ThemeName.standard
@@ -14,56 +15,18 @@ struct SettingsView: View {
     @AppStorage(AppSettings.Key.useMediaEngine) private var useMediaEngine = true
     /// threads is the stored encoder thread cap, 0 for automatic.
     @AppStorage(AppSettings.Key.threads) private var threads = 0
-    /// colorScheme is the scheme the swatches preview.
+    /// colorScheme picks which palette of a two-appearance theme the dots show.
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         TabView {
-            look.tabItem { Label("Look", systemImage: "paintpalette") }
-            output.tabItem { Label("Output", systemImage: "square.and.arrow.down") }
+            general.tabItem { Label("General", systemImage: "gearshape") }
+            looks.tabItem { Label("Appearance", systemImage: "paintpalette") }
         }
-        .frame(width: 460, height: 420)
-        .themed()
     }
 
-    /// look is the Appearance and Theme tab.
-    private var look: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Picker("Appearance", selection: $appearance) {
-                ForEach(Appearance.allCases, id: \.self) { Text($0.name).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .foregroundStyle(Theme.text)
-            Text("Theme").font(.headline).foregroundStyle(Theme.text)
-            List(ThemeName.allCases, id: \.self) { item in
-                Button { theme = item } label: { themeRow(item) }
-                    .buttonStyle(.plain)
-            }
-            .scrollContentBackground(.hidden)
-        }
-        .padding(20)
-    }
-
-    /// themeRow shows a theme's name with swatches of its background, accent, and text.
-    private func themeRow(_ item: ThemeName) -> some View {
-        let palette = item.palette(dark: colorScheme == .dark)
-        return HStack(spacing: 8) {
-            ForEach([palette.background, palette.accent, palette.text], id: \.self) { swatch in
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(swatch.color)
-                    .frame(width: 24, height: 24)
-                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(Theme.border))
-            }
-            Text(item.name).foregroundStyle(Theme.text)
-            Spacer()
-            if item == theme { Image(systemName: "checkmark").foregroundStyle(Theme.accentText) }
-        }
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .combine)
-    }
-
-    /// output is the destination and media engine tab.
-    private var output: some View {
+    /// general is the destination, media engine, and CPU limit tab.
+    private var general: some View {
         Form {
             Picker("Default destination", selection: Binding(
                 get: { outputFolder.isEmpty },
@@ -79,13 +42,63 @@ struct SettingsView: View {
             }
             Toggle("Use Media Engine by default", isOn: $useMediaEngine)
             Stepper(value: $threads, in: 0...ProcessInfo.processInfo.activeProcessorCount) {
-                Text(threads == 0 ? "CPU limit: Automatic" : "CPU limit: \(threads) of \(ProcessInfo.processInfo.activeProcessorCount) cores")
+                Text(threads == 0 ? "CPU limit: Automatic"
+                    : "CPU limit: \(threads) of \(ProcessInfo.processInfo.activeProcessorCount) cores")
                     .monospacedDigit()
             }
             .help("Caps the threads a software encode uses, so the Mac stays responsive. Automatic lets ffmpeg decide.")
         }
-        .foregroundStyle(Theme.text)
-        .padding(20)
+        .formStyle(.grouped)
+        .frame(width: 480)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// looks is the appearance and theme tab.
+    private var looks: some View {
+        Form {
+            Picker("Appearance", selection: $appearance) {
+                ForEach(Appearance.allCases, id: \.self) { Text($0.name).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            LabeledContent("Theme") {
+                VStack(alignment: .trailing, spacing: 6) {
+                    HStack(spacing: 6) {
+                        ForEach(ThemeName.allCases, id: \.self) { dot($0) }
+                    }
+                    Text(theme.name)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: 480)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// dot is one theme's swatch: its accent ringed in its background, checked when chosen, the
+    /// shape of the accent color row in System Settings.
+    private func dot(_ item: ThemeName) -> some View {
+        let palette = item.palette(dark: colorScheme == .dark)
+        let chosen = item == theme
+        return Button { theme = item } label: {
+            Circle()
+                .fill(palette.accent.color)
+                .frame(width: 20, height: 20)
+                .overlay(Circle().strokeBorder(palette.background.color, lineWidth: 1))
+                .overlay {
+                    if chosen {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(palette.onAccent.color)
+                            .accessibilityHidden(true)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .help(item.name)
+        .accessibilityLabel(item.name)
+        .accessibilityAddTraits(chosen ? .isSelected : [])
     }
 
     /// folderLabel names the chosen folder, or asks for one.

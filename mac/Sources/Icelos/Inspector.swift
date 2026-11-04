@@ -12,6 +12,20 @@ struct Inspector: View {
     @State private var naming = false
 
     var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            form
+            Divider()
+            footer
+        }
+        // A small ideal height keeps the form's full height from becoming the window's size.
+        .frame(minHeight: 0, idealHeight: 200, maxHeight: .infinity)
+    }
+
+    /// form is the grouped settings form, drawn on the inspector's own background, or a spinner
+    /// until the catalog arrives.
+    @ViewBuilder private var form: some View {
         Group {
             if let catalog = model.catalog, let current = model.inspected {
                 SettingsForm(catalog: catalog,
@@ -29,23 +43,7 @@ struct Inspector: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            VStack(spacing: 0) {
-                header
-                Divider()
-            }
-            .background(Theme.surface)
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                Divider()
-                footer
-            }
-            .background(Theme.surface)
-        }
-        .background(Theme.surface)
-        // A small ideal height keeps the form's full height from becoming the window's size.
-        .frame(minHeight: 0, idealHeight: 200, maxHeight: .infinity)
+        .frame(maxHeight: .infinity)
     }
 
     /// header says what the inspector edits, with the switch between a file's own settings and the
@@ -59,7 +57,7 @@ struct Inspector: View {
             if let summary {
                 Text(summary)
                     .font(.callout)
-                    .foregroundStyle(Theme.muted)
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if case .item(let id, let name, let usesWindow) = model.inspectorScope {
@@ -79,7 +77,7 @@ struct Inspector: View {
     /// title names what the form edits.
     private var title: String {
         if case .item(_, let name, false) = model.inspectorScope { return "Override for \(name)" }
-        return "Window settings"
+        return "Window Settings"
     }
 
     /// summary describes the inspected settings in a sentence.
@@ -97,7 +95,7 @@ struct Inspector: View {
             if let error = model.presetError {
                 Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.callout)
-                    .foregroundStyle(Theme.danger)
+                    .foregroundStyle(.red)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -162,7 +160,6 @@ struct SettingsForm<Extra: View>: View {
             extra
         }
         .formStyle(.grouped)
-        .scrollContentBackground(.hidden)
     }
 
     /// shown is the set of controls the catalog rules give the draft.
@@ -205,7 +202,7 @@ struct SettingsForm<Extra: View>: View {
         } footer: {
             Text(copyNote)
                 .font(.callout)
-                .foregroundStyle(Theme.muted)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
@@ -293,7 +290,7 @@ struct SettingsForm<Extra: View>: View {
                 }
             }
             if let problem = sizeProblem {
-                note(problem, color: Theme.danger)
+                note(problem, color: .red)
             }
         }
     }
@@ -482,7 +479,7 @@ struct SettingsForm<Extra: View>: View {
             let cap = catalog.maxAudioBitrate(for: codec, sampleRate: draft.audio.sampleRate,
                                               channels: draft.audio.channels)
             if cap > 0, let b = draft.audio.bitrate, b > cap {
-                note("\(codec.name) tops out at \(BitrateField.label(cap)) here.", color: Theme.danger)
+                note("\(codec.name) tops out at \(BitrateField.label(cap)) here.", color: .red)
             }
         }
         if shown.contains(.bitDepth), let depths = codec.bitDepths {
@@ -507,10 +504,10 @@ struct SettingsForm<Extra: View>: View {
     }
 
     /// note is a secondary line of explanation.
-    private func note(_ text: String, color: ThemeColor? = nil) -> some View {
+    private func note(_ text: String, color: Color? = nil) -> some View {
         Text(text)
             .font(.callout)
-            .foregroundStyle(color ?? Theme.muted)
+            .foregroundStyle(color.map(AnyShapeStyle.init) ?? AnyShapeStyle(.secondary))
     }
 
     /// rateControlName labels a rate control.
