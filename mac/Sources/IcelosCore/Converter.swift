@@ -51,6 +51,10 @@ public struct Item: Identifiable, Sendable, Equatable {
     public var plan: Plan?
     /// planError is why the backend refused the latest settings for this file.
     public var planError: String?
+    /// estimate is the size the last plan expected. It stays while the next plan is in flight, so
+    /// the row keeps a number during edits, and clears when a plan fails or a conversion goes out
+    /// with settings no plan has seen.
+    public var estimate: Estimate.Range?
     /// chapterPart is true for each file of a conversion split by chapters.
     public var chapterPart = false
     /// planSeq numbers the plan requests, so a stale answer is dropped.
@@ -379,7 +383,10 @@ public final class Converter {
         planTask?.cancel()
         for i in items.indices where items[i].phase == .pending && items[i].probeError == nil {
             items[i].submitted = true
-            if request(for: items[i], base: base, op: "plan") != items[i].planRequest { items[i].plan = nil }
+            if request(for: items[i], base: base, op: "plan") != items[i].planRequest {
+                items[i].plan = nil
+                items[i].estimate = nil
+            }
             var req = request(for: items[i], base: base, op: "add")
             req.id = "add:" + items[i].id.uuidString
             req.splitChapters = items[i].splitChapters ? true : nil
@@ -537,8 +544,7 @@ public final class Converter {
     /// row is the display model of the file with id, or nil when it is gone.
     public func row(_ id: UUID) -> RowModel? {
         guard let item = items.first(where: { $0.id == id }) else { return nil }
-        return RowModel(item: item, windowSettings: settings, catalog: catalog, targetSize: targetSize,
-                        hardware: hardware)
+        return RowModel(item: item, windowSettings: settings, catalog: catalog)
     }
 
     /// clearFinished drops finished items here and in the converter.
@@ -618,6 +624,7 @@ public final class Converter {
             update(itemID) { item in
                 guard item.planSeq == seq, item.phase == .pending else { return }
                 item.plan = m.plan
+                item.estimate = m.plan?.estimate
             }
         case "add":
             guard let status = m.status else { return }
@@ -634,7 +641,11 @@ public final class Converter {
             case "add": update(itemID) { $0.addError = text }
             case _ where kind.hasPrefix("plan."):
                 let seq = Converter.planSeq(kind)
-                update(itemID) { if $0.planSeq == seq { $0.planError = text } }
+                update(itemID) { item in
+                    guard item.planSeq == seq else { return }
+                    item.planError = text
+                    item.estimate = nil
+                }
             case "cancel": break
             case "preset.save", "preset.delete":
                 savingID = nil

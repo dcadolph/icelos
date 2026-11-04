@@ -84,11 +84,8 @@ public struct RowModel: Equatable, Sendable {
     public var media: Media
 
     /// Creates the row for item, which converts with its own settings or else windowSettings.
-    /// TargetSize is the size typed for presets that aim for one, and hardware is true when the
-    /// media engine is on. Once the file's plan arrives, its copied streams and its encoder decide
-    /// the estimate in place of the settings and the hardware switch.
-    public init(item: Item, windowSettings: Preset?, catalog: Catalog?, targetSize: String = "",
-                hardware: Bool = false) {
+    /// The estimate is the one the file's last plan carried.
+    public init(item: Item, windowSettings: Preset?, catalog: Catalog?) {
         let settings = item.settings ?? windowSettings
         name = item.chapterPart ? (item.outputURL?.lastPathComponent ?? item.url.lastPathComponent)
             : item.url.lastPathComponent
@@ -112,16 +109,13 @@ public struct RowModel: Equatable, Sendable {
 
         switch item.phase {
         case .pending, .queued:
-            let plan = item.plan
-            lossless = plan?.lossless == true
+            lossless = item.plan?.lossless == true
             if let error = item.planError, item.phase == .pending {
                 detail = error
                 detailTone = .danger
-            } else if let info = item.info, let settings,
-               let range = Estimate.bytes(info, RowModel.applying(plan?.copied, to: settings),
-                                          targetBytes: Estimate.parseSize(targetSize),
-                                          hardware: plan?.hardware ?? hardware) {
-                estimate = Estimate.text(range, source: info.size > 0 ? info.size : nil)
+            } else if let range = item.estimate {
+                let size = item.info?.size ?? 0
+                estimate = Estimate.text(range, source: size > 0 ? size : nil)
             }
         case .running:
             progress = item.status?.progress.percent ?? 0
@@ -135,15 +129,6 @@ public struct RowModel: Equatable, Sendable {
         case .canceled:
             break
         }
-    }
-
-    /// applying returns p with the streams the plan copies set to copy, so the estimate counts
-    /// them at their source size.
-    static func applying(_ copied: Copy?, to p: Preset) -> Preset {
-        var out = p
-        if copied?.video?.copy == true { out.video.codec = copyCodec }
-        if copied?.audio?.copy == true { out.audio.codec = copyCodec }
-        return out
     }
 
     /// badge names the item's state. A file not read yet, or unreadable, gets its own label.

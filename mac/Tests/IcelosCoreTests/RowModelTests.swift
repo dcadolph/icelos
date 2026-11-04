@@ -14,9 +14,14 @@ private func progress(_ percent: Double, passes: Int = 1, speed: Double = 0, eta
                 encoder: "hevc_videotoolbox", hardware: true)
 }
 
-/// item returns a probed calibration clip in phase, converted with p.
+/// planned is the estimate the test items' last plan carried.
+private let planned = Estimate.Range(low: 8_000_000, high: 25_000_000)
+
+/// item returns a probed calibration clip in phase, converted with p, whose last plan expected
+/// planned.
 private func item(_ phase: Phase, preset p: Preset) -> Item {
     var it = Item(id: UUID(), url: URL(fileURLWithPath: "/x/clip.mov"), info: calibrationSource)
+    it.estimate = planned
     func status(_ state: JobState, _ pr: JobProgress = progress(0), error: String? = nil) -> JobStatus {
         JobStatus(id: "1", job: Job(input: "/x/clip.mov", output: "/x/clip.mp4", preset: p, hardware: true),
                   state: state, progress: pr, error: error)
@@ -36,7 +41,7 @@ private func item(_ phase: Phase, preset p: Preset) -> Item {
     @Test(arguments: ["apple", "compatible", "web", "tiny", "target-size", "remux", "audio", "mp3"])
     func everyPendingRowSaysWhatItWillMake(id: String) throws {
         let p = try #require(try builtins()[id])
-        let row = RowModel(item: item(.pending, preset: p), windowSettings: p, catalog: try catalog(), targetSize: "25MB")
+        let row = RowModel(item: item(.pending, preset: p), windowSettings: p, catalog: try catalog())
         let want: [String: [String]] = [
             "apple": ["MP4", "1920×1080", "HEVC (H.265)"],
             "compatible": ["MP4", "1920×1080", "H.264"],
@@ -48,8 +53,7 @@ private func item(_ phase: Phase, preset p: Preset) -> Item {
             "mp3": ["MP3", "MP3", "192 kb/s"],
         ]
         #expect(row.chips == want[id])
-        let estimate = try #require(row.estimate)
-        #expect(estimate.hasPrefix("≈ "))
+        #expect(row.estimate == "≈ 8 to 25 MB, at least 86% smaller")
         #expect(row.badge == RowModel.Badge(text: "Ready", tone: .muted))
         #expect(row.actions == [.remove])
         #expect(row.media == .video)
@@ -83,7 +87,7 @@ private func item(_ phase: Phase, preset p: Preset) -> Item {
         #expect(failed.actions == [.retry, .remove])
 
         let queued = RowModel(item: item(.queued, preset: p), windowSettings: p, catalog: nil)
-        #expect(queued.estimate != nil)
+        #expect(queued.estimate == "≈ 8 to 25 MB, at least 86% smaller")
         #expect(queued.actions == [.cancel])
     }
 
@@ -121,30 +125,39 @@ private func item(_ phase: Phase, preset p: Preset) -> Item {
         let off = Copy(video: Verdict(copy: false, reason: "passthrough off"),
                        audio: Verdict(copy: false, reason: "passthrough off"))
         it.plan = Plan(copy: both, copied: off, lossless: false, hardware: true)
-        let qualifies = RowModel(item: it, windowSettings: p, catalog: try catalog(), hardware: true)
+        let qualifies = RowModel(item: it, windowSettings: p, catalog: try catalog())
         #expect(!qualifies.lossless, "copy true but copied false shows no chip")
-        #expect(qualifies.estimate?.contains(" to ") == true, "an encode keeps the quality range")
 
         it.plan = Plan(copy: both, copied: both, lossless: true)
-        let copies = RowModel(item: it, windowSettings: p, catalog: try catalog(), hardware: true)
-        #expect(copies.lossless)
-        let estimate = try #require(copies.estimate)
-        #expect(!estimate.contains(" to "), "copied streams are a point estimate: \(estimate)")
+        #expect(RowModel(item: it, windowSettings: p, catalog: try catalog()).lossless)
 
         it.plan = nil
         #expect(!RowModel(item: it, windowSettings: p, catalog: nil).lossless, "no plan, no chip")
     }
 
-    @Test func planHardwareDecidesTheEstimate() throws {
+    @Test func estimateIsTheLastPlans() throws {
         let p = try #require(try builtins()["web"])
         var it = item(.pending, preset: p)
-        let encode = Copy(video: Verdict(copy: false, reason: "codec"), audio: Verdict(copy: false, reason: "codec"))
-        let software = RowModel(item: it, windowSettings: p, catalog: nil, hardware: false).estimate
-        let hardware = RowModel(item: it, windowSettings: p, catalog: nil, hardware: true).estimate
-        #expect(software != hardware)
-        it.plan = Plan(copy: encode, copied: encode, lossless: false, hardware: false)
-        #expect(RowModel(item: it, windowSettings: p, catalog: nil, hardware: true).estimate == software,
-                "the plan's encoder wins over the switch")
+        #expect(it.plan == nil)
+        #expect(RowModel(item: it, windowSettings: p, catalog: nil).estimate == "≈ 8 to 25 MB, at least 86% smaller",
+                "the last plan's estimate stays while the next plan is in flight")
+
+        it.estimate = Estimate.Range(181_765_278)
+        #expect(RowModel(item: it, windowSettings: p, catalog: nil).estimate == "≈ 181.8 MB, same size")
+
+        it.info?.size = 0
+        #expect(RowModel(item: it, windowSettings: p, catalog: nil).estimate == "≈ 181.8 MB",
+                "no source size, no saving")
+
+        it.planError = "target size too small"
+        let refused = RowModel(item: it, windowSettings: p, catalog: nil)
+        #expect(refused.estimate == nil)
+        #expect(refused.detail == "target size too small")
+        #expect(refused.detailTone == .danger)
+
+        it.planError = nil
+        it.estimate = nil
+        #expect(RowModel(item: it, windowSettings: p, catalog: nil).estimate == nil)
     }
 
     @Test func copyNoteSaysWhatCopies() {

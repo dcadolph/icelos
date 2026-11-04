@@ -63,8 +63,7 @@ struct JobRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let row = RowModel(item: item, windowSettings: model.settings, catalog: model.catalog,
-                           targetSize: model.targetSize, hardware: model.hardware)
+        let row = RowModel(item: item, windowSettings: model.settings, catalog: model.catalog)
         HStack(spacing: 14) {
             Thumbnail(image: model.thumbnails[item.url], media: row.media, tone: row.badge.tone)
             VStack(alignment: .leading, spacing: 4) {

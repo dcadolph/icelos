@@ -42,10 +42,12 @@ private func streamsProbe(_ id: UUID) -> String {
     #"{"type":"probe","reply":"probe:\#(id.uuidString)","info":{"format":"mov","durationNs":60000000000,"size":1000000,"streams":[{"index":0,"codec_type":"video","codec_name":"h264","width":1920,"height":1080},{"index":1,"codec_type":"audio","codec_name":"aac","channels":2,"tags":{"language":"eng","title":"Main"}},{"index":2,"codec_type":"audio","codec_name":"ac3","channels":6,"tags":{"language":"fra"}},{"index":3,"codec_type":"audio","codec_name":"aac","channels":2,"tags":{"title":"Commentary"}},{"index":4,"codec_type":"subtitle","codec_name":"mov_text","tags":{"language":"eng"}}],"chapters":[{"startNs":0,"endNs":30000000000,"title":"One"},{"startNs":30000000000,"endNs":60000000000,"title":"Two"}]}}"#
 }
 
-/// planLine is a plan reply for item with sequence seq.
-private func planLine(_ id: UUID, seq: Int, lossless: Bool, copied: Bool, hardware: Bool) -> String {
+/// planLine is a plan reply for item with sequence seq, carrying estimate when set.
+private func planLine(_ id: UUID, seq: Int, lossless: Bool, copied: Bool, hardware: Bool,
+                      estimate: Estimate.Range? = nil) -> String {
     let verdict = copied ? #"{"copy":true}"# : #"{"copy":false,"reason":"passthrough off"}"#
-    return #"{"type":"plan","reply":"plan.\#(seq):\#(id.uuidString)","plan":{"copy":{"video":{"copy":true},"audio":{"copy":true}},"copied":{"video":\#(verdict),"audio":\#(verdict)},"lossless":\#(lossless),"output":"/x/clip.mp4","passes":[["-i","/x/clip.mov"]],"hardware":\#(hardware)}}"#
+    let size = estimate.map { #","estimate":{"low":\#($0.low),"high":\#($0.high)}"# } ?? ""
+    return #"{"type":"plan","reply":"plan.\#(seq):\#(id.uuidString)","plan":{"copy":{"video":{"copy":true},"audio":{"copy":true}},"copied":{"video":\#(verdict),"audio":\#(verdict)},"lossless":\#(lossless),"output":"/x/clip.mp4","passes":[["-i","/x/clip.mov"]],"hardware":\#(hardware)\#(size)}}"#
 }
 
 @MainActor
@@ -179,6 +181,66 @@ private func planLine(_ id: UUID, seq: Int, lossless: Bool, copied: Bool, hardwa
         h.model.convertAll()
         #expect(h.model.items[0].plan == nil, "a plan for other settings never labels the submitted file")
         #expect(h.model.row(id)?.lossless == false)
+    }
+
+    @Test func estimateRidesThePlanAndStaysWhileTheNextIsInFlight() async throws {
+        let h = Harness()
+        try h.load()
+        h.model.add(urls: [URL(fileURLWithPath: "/x/clip.mov")])
+        let id = h.model.items[0].id
+        h.model.handle(try decode(streamsProbe(id)))
+        await h.model.planTask?.value
+        #expect(h.model.row(id)?.estimate == nil, "no plan yet, no estimate")
+
+        let range = Estimate.Range(low: 200_000, high: 500_000)
+        h.model.handle(try decode(planLine(id, seq: 1, lossless: false, copied: false, hardware: true,
+                                           estimate: range)))
+        #expect(h.model.items[0].estimate == range)
+        #expect(h.model.row(id)?.estimate == "≈ 200 to 500 KB, at least 50% smaller")
+
+        h.model.passthrough = true
+        await h.model.planTask?.value
+        #expect(h.sent.last?.id == "plan.2:" + id.uuidString)
+        #expect(h.model.items[0].plan == nil)
+        #expect(h.model.items[0].estimate == range, "the last estimate stays while the next plan is in flight")
+
+        h.model.handle(try decode(planLine(id, seq: 1, lossless: false, copied: false, hardware: true,
+                                           estimate: Estimate.Range(9))))
+        #expect(h.model.items[0].estimate == range, "a stale plan leaves the estimate alone")
+
+        h.model.handle(try decode(planLine(id, seq: 2, lossless: true, copied: true, hardware: false,
+                                           estimate: Estimate.Range(1_000_000))))
+        #expect(h.model.row(id)?.estimate == "≈ 1 MB, same size")
+
+        h.model.handle(try decode(planLine(id, seq: 2, lossless: true, copied: true, hardware: false)))
+        #expect(h.model.items[0].estimate == nil, "a plan without an estimate clears it")
+
+        h.model.handle(try decode(planLine(id, seq: 2, lossless: true, copied: true, hardware: false,
+                                           estimate: range)))
+        h.model.passthrough = false
+        await h.model.planTask?.value
+        h.model.handle(try decode(#"{"type":"error","reply":"plan.3:\#(id.uuidString)","error":"no subtitle stream"}"#))
+        #expect(h.model.items[0].estimate == nil, "a refused plan clears the estimate")
+        #expect(h.model.row(id)?.estimate == nil)
+    }
+
+    @Test func convertKeepsOnlyAPlannedEstimate() async throws {
+        let h = Harness()
+        try h.load()
+        h.model.add(urls: [URL(fileURLWithPath: "/x/a.mov"), URL(fileURLWithPath: "/x/b.mov")])
+        let a = h.model.items[0].id, b = h.model.items[1].id
+        h.model.handle(try decode(streamsProbe(a)))
+        h.model.handle(try decode(streamsProbe(b)))
+        await h.model.planTask?.value
+        let range = Estimate.Range(low: 200_000, high: 500_000)
+        h.model.handle(try decode(planLine(a, seq: 1, lossless: false, copied: false, hardware: true, estimate: range)))
+        h.model.handle(try decode(planLine(b, seq: 1, lossless: false, copied: false, hardware: true, estimate: range)))
+        h.model.setStreams(b, Streams(dropMetadata: true))
+        h.model.convertAll()
+        #expect(h.model.items[0].estimate == range, "the plan saw what was submitted")
+        #expect(h.model.row(a)?.estimate == "≈ 200 to 500 KB, at least 50% smaller")
+        #expect(h.model.items[1].estimate == nil, "no plan saw the edited streams")
+        #expect(h.model.row(b)?.estimate == nil)
     }
 
     @Test func planErrorsShowOnTheRow() async throws {

@@ -315,10 +315,14 @@ public struct Plan: Codable, Hashable, Sendable {
     public var hardware: Bool
     /// filters lists filters that some ffmpeg builds lack.
     public var filters: [String]?
+    /// estimate is the expected output size, a range in quality mode and one size otherwise, nil
+    /// when the backend has nothing to go on.
+    public var estimate: Estimate.Range?
 
     /// Creates a plan.
     public init(copy: Copy, copied: Copy, lossless: Bool, output: String = "", passes: [[String]] = [],
-                encoder: String? = nil, hardware: Bool = false, filters: [String]? = nil) {
+                encoder: String? = nil, hardware: Bool = false, filters: [String]? = nil,
+                estimate: Estimate.Range? = nil) {
         self.copy = copy
         self.copied = copied
         self.lossless = lossless
@@ -327,6 +331,7 @@ public struct Plan: Codable, Hashable, Sendable {
         self.encoder = encoder
         self.hardware = hardware
         self.filters = filters
+        self.estimate = estimate
     }
 }
 
@@ -444,13 +449,6 @@ public struct MediaInfo: Codable, Hashable, Sendable {
 
     /// video is the first video stream that is not cover art.
     public var video: MediaStream? { streams?.first { $0.kind == "video" && !$0.isCover } }
-
-    /// bitrate is the overall bit rate in bits per second, or nil when the size or duration is
-    /// unknown.
-    public var bitrate: Double? {
-        guard size > 0, durationNs > 0 else { return nil }
-        return Double(size) * 8 / (Double(durationNs) / 1e9)
-    }
 
     /// audio is the first audio stream.
     public var audio: MediaStream? { streams?.first { $0.kind == "audio" } }
