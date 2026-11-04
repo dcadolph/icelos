@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import Observation
+import os
 
 /// Phase is where a file is from the app's point of view.
 public enum Phase: Sendable, Equatable {
@@ -83,6 +84,9 @@ public struct Item: Identifiable, Sendable, Equatable {
     /// outputURL is the destination once known.
     public var outputURL: URL? { status.map { URL(fileURLWithPath: $0.job.output) } }
 }
+
+/// convertLog records files opened and jobs finished in the unified log, paths only.
+private let convertLog = Logger(subsystem: "com.dcadolph.icelos", category: "convert")
 
 /// Converter is the window model. It turns user actions into requests and backend messages
 /// into item state.
@@ -366,12 +370,15 @@ public final class Converter {
     /// add appends files and asks the converter to probe each one. Duplicates of a pending
     /// file are skipped.
     public func add(urls: [URL]) {
+        var added = 0
         for url in urls {
             if items.contains(where: { $0.url == url && $0.phase == .pending }) { continue }
             let item = Item(id: UUID(), url: url)
             items.append(item)
+            added += 1
             send(Request(id: "probe:" + item.id.uuidString, op: "probe", path: url.path))
         }
+        if added > 0 { convertLog.notice("opened \(added) files") }
     }
 
     /// convertAll submits every pending, readable item. An unedited preset goes by ID, so the
@@ -695,9 +702,15 @@ public final class Converter {
     private func apply(_ status: JobStatus) {
         guard let i = items.firstIndex(where: { $0.jobID == status.id }) else { return }
         if let old = items[i].status, old.state.isFinished, !status.state.isFinished { return }
+        let finishing = status.state != items[i].status?.state
         items[i].status = status
         if status.state == .done {
             items[i].outputSize = fileSize(URL(fileURLWithPath: status.job.output))
+        }
+        if finishing && status.state == .done {
+            convertLog.notice("job done: \(status.job.output, privacy: .public)")
+        } else if finishing && status.state == .failed {
+            convertLog.notice("job failed: \(status.error ?? "no reason given", privacy: .public)")
         }
     }
 

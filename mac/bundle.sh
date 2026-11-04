@@ -129,6 +129,20 @@ cat > "$app/Contents/Info.plist" <<PLIST
 	<key>NSAccentColorName</key><string>AccentColor</string>
 	<key>NSHighResolutionCapable</key><true/>
 	<key>NSHumanReadableCopyright</key><string>Free software under the GNU GPL v3 or later.</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key><string>Media</string>
+			<key>CFBundleTypeRole</key><string>Viewer</string>
+			<key>LSHandlerRank</key><string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.movie</string>
+				<string>public.audio</string>
+				<string>public.audiovisual-content</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>
 PLIST
