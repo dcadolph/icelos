@@ -514,7 +514,7 @@ private func planLine(_ id: UUID, seq: Int, lossless: Bool, copied: Bool, hardwa
 
         var stored = body
         stored.custom = true
-        let presets = try #require(h.model.presets) + [stored]
+        let presets = h.model.presets + [stored]
         h.model.handle(Message(type: "preset.save", reply: "preset.save", presets: presets))
         #expect(h.model.presetID == "my-phone")
         #expect(h.model.settings == stored)

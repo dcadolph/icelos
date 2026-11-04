@@ -1,0 +1,220 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The engine, CLI, and server on Linux against a pinned FFmpeg, so every software encoder the
+  # app ships is exercised by real encodes. No test may skip.
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      # The month-end BtbN autobuild that windows/ffmpeg-source.txt pins, FFmpeg 9.0.2. The sum
+      # comes from that release's checksums.sha256.
+      FFMPEG_TAG: autobuild-2026-10-31-12-59
+      FFMPEG_ASSET: ffmpeg-n9.0.2-39-g7adfbe40dc-linux64-gpl-9.0.tar.xz
+      FFMPEG_SHA256: 73e29a56974ae5a651133a04584c7483b21afe941e17dc91d79814a758b608d3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # BtbN prunes old releases, so the tarball is kept on its sum and the sum is checked again
+      # after every restore.
+      - name: Cache the FFmpeg download
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/ffmpeg-download
+          key: btbn-ffmpeg-${{ env.FFMPEG_SHA256 }}
+      - name: Fetch FFmpeg
+        run: |
+          set -euo pipefail
+          dl="$RUNNER_TEMP/ffmpeg-download"
+          mkdir -p "$dl" "$RUNNER_TEMP/ffmpeg"
+          if [ ! -f "$dl/$FFMPEG_ASSET" ]; then
+            curl -fsSL --retry 3 -o "$dl/$FFMPEG_ASSET" \
+              "https://github.com/BtbN/FFmpeg-Builds/releases/download/$FFMPEG_TAG/$FFMPEG_ASSET"
+          fi
+          echo "$FFMPEG_SHA256  $dl/$FFMPEG_ASSET" | sha256sum -c -
+          tar -xJf "$dl/$FFMPEG_ASSET" --strip-components=1 -C "$RUNNER_TEMP/ffmpeg"
+          echo "$RUNNER_TEMP/ffmpeg/bin" >> "$GITHUB_PATH"
+      - name: Require the pinned FFmpeg and its encoders
+        run: |
+          set -euo pipefail
+          command -v ffmpeg ffprobe
+          ffmpeg -hide_banner -version | head -1 | grep -E '^ffmpeg version n?9\.0\.2'
+          encoders="$(ffmpeg -hide_banner -encoders)"
+          for name in libx264 libx265 libsvtav1 libvpx libvpx-vp9 libtheora libvorbis libopus \
+            libmp3lame libopencore_amrnb; do
+            if ! grep -qw -- "$name" <<<"$encoders"; then
+              echo "::error::ffmpeg lacks the $name encoder"
+              exit 1
+            fi
+          done
+      - run: go build ./...
+      - run: go vet ./...
+      - run: GOOS=windows go vet ./...
+      - name: Test
+        run: |
+          set -o pipefail
+          go test -race -count=1 -timeout 30m -json ./... | tee "$RUNNER_TEMP/go-test.json" |
+            jq -Rrj '. as $l | try (fromjson | select(.Action == "output" or .Action == "build-output") | .Output) catch ($l + "\n")'
+      - name: Fail on skipped tests
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          jq -Rr 'fromjson? | select(.Action == "skip" and .Test != null) | "\(.Package) \(.Test)"' \
+            "$RUNNER_TEMP/go-test.json" > "$RUNNER_TEMP/skipped.txt"
+          n="$(wc -l < "$RUNNER_TEMP/skipped.txt" | tr -d ' ')"
+          echo "skipped tests: $n"
+          if [ "$n" != 0 ]; then
+            sed 's/^/::error::skipped: /' "$RUNNER_TEMP/skipped.txt"
+            exit 1
+          fi
+
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GOLANGCI_LINT_VERSION: v2.14.0
+      SHELLCHECK_VERSION: v0.11.0
+      SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+      ACTIONLINT_VERSION: v1.7.12
+      RUFF_VERSION: 0.17.3
+      PSSCRIPTANALYZER_VERSION: 1.25.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Built from source with the module's Go: prebuilt binaries trail the newest stdlib.
+      - name: golangci-lint
+        run: |
+          set -euo pipefail
+          go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$GOLANGCI_LINT_VERSION"
+          "$(go env GOPATH)/bin/golangci-lint" run ./...
+      - name: Fetch shellcheck
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/shellcheck.tar.xz"
+          curl -fsSL --retry 3 -o "$tarball" \
+            "https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
+          echo "$SHELLCHECK_SHA256  $tarball" | sha256sum -c -
+          tar -xJf "$tarball" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION" >> "$GITHUB_PATH"
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          shellcheck --version
+          git ls-files -z '*.sh' | xargs -0 shellcheck
+          git ls-files -z '*.sh' | xargs -0 -n1 bash -n
+      - name: ruff
+        run: |
+          set -euo pipefail
+          pipx run --spec "ruff==$RUFF_VERSION" ruff check mac/dmg.py
+          python3 -m py_compile mac/dmg.py
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/windows/fetch-ffmpeg.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Host "::error::$_" }
+            exit 1
+          }
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -RequiredVersion $env:PSSCRIPTANALYZER_VERSION -Scope CurrentUser -Force
+          Invoke-ScriptAnalyzer -Path windows/fetch-ffmpeg.ps1 -Severity Error, Warning -EnableExit
+      - name: actionlint
+        run: |
+          go run "github.com/rhysd/actionlint/cmd/actionlint@$ACTIONLINT_VERSION" \
+            -shellcheck "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION/shellcheck"
+
+  # The Go suite against the FFmpeg the app bundles (with VideoToolbox), then the Swift app built
+  # with warnings as errors, its tests against the real helper, and the bundle.
+  mac:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install build tools
+        run: brew install cmake nasm meson ninja pkg-config autoconf automake
+      # The same key and paths as release.yml, so the two workflows share one FFmpeg build.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            mac/.build/ffmpeg/arm64
+            mac/.build/ffmpeg/src
+          key: ffmpeg-arm64-${{ hashFiles('mac/build-ffmpeg.sh', 'mac/ffmpeg-sources.txt') }}
+          restore-keys: ffmpeg-arm64-
+      - name: Build FFmpeg
+        run: mac/build-ffmpeg.sh arm64
+      - name: Keep the FFmpeg build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-logs-arm64
+          path: mac/.build/ffmpeg/logs-arm64/
+      - name: Put the bundled FFmpeg on PATH
+        run: echo "$GITHUB_WORKSPACE/mac/.build/ffmpeg/arm64/bin" >> "$GITHUB_PATH"
+      - name: Show the hardware and Theora encoders
+        run: ffmpeg -hide_banner -encoders | grep -E 'videotoolbox|libtheora'
+      - name: Test
+        run: |
+          set -o pipefail
+          go test -race -count=1 -timeout 30m -json ./... | tee "$RUNNER_TEMP/go-test.json" |
+            jq -Rrj '. as $l | try (fromjson | select(.Action == "output" or .Action == "build-output") | .Output) catch ($l + "\n")'
+      - name: Fail on skipped tests
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          jq -Rr 'fromjson? | select(.Action == "skip" and .Test != null) | "\(.Package) \(.Test)"' \
+            "$RUNNER_TEMP/go-test.json" > "$RUNNER_TEMP/skipped.txt"
+          n="$(wc -l < "$RUNNER_TEMP/skipped.txt" | tr -d ' ')"
+          echo "skipped tests: $n"
+          if [ "$n" != 0 ]; then
+            sed 's/^/::error::skipped: /' "$RUNNER_TEMP/skipped.txt"
+            exit 1
+          fi
+      - name: Build the Go helper
+        run: go build -o mac/.build/icelos .
+      - name: Build the app with warnings as errors
+        run: swift build --package-path mac --build-tests -Xswiftc -warnings-as-errors
+      - name: Test the app against the helper
+        env:
+          ICELOS_BACKEND: ${{ github.workspace }}/mac/.build/icelos
+        run: swift test --package-path mac -Xswiftc -warnings-as-errors
+      - name: Bundle the app
+        env:
+          ICELOS_ARCHS: arm64
+        run: mac/bundle.sh
+      - name: Require the bundled FFmpeg in the helper
+        run: |
+          set -euo pipefail
+          out="$(mac/.build/Icelos.app/Contents/Helpers/icelos encoders)"
+          echo "$out"
+          grep -q 'Contents/Helpers/ffmpeg' <<<"$out"
+      - name: Zip the app
+        run: ditto -c -k --keepParent mac/.build/Icelos.app "$RUNNER_TEMP/Icelos-ci.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: icelos-macos-ci
+          path: ${{ runner.temp }}/Icelos-ci.zip
+          if-no-files-found: error
+          retention-days: 14
