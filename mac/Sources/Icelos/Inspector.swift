@@ -542,9 +542,11 @@ struct BitrateField: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            TextField("Automatic", value: Binding(
+            TextField("Bitrate", value: Binding(
                 get: { bitsPerSecond.map { $0 / 1000 } },
-                set: { bitsPerSecond = $0.map { $0 * 1000 } }), format: .number.grouping(.never))
+                set: { bitsPerSecond = $0.map { $0 * 1000 } }), format: .number.grouping(.never),
+                prompt: Text("Automatic"))
+                .labelsHidden()
                 .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.trailing)
                 .frame(width: 80)

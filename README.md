@@ -28,7 +28,8 @@ What works today:
 - Stream selection: keep any of a file's audio tracks, add up to six audio files as extra tracks, keep, pick, or burn in subtitles, add a subtitle file, drop chapters or metadata, and split a file into one output per chapter.
 - Passthrough: a stream that already matches the target is copied instead of encoded, and the app marks a file LOSSLESS when nothing is re-encoded.
 - Size estimates on each file before it converts, and the Apple media engine for H.264, HEVC, and ProRes.
-- Twelve themes with light and dark appearance, and a Settings window for the default destination, the media engine, and a CPU limit.
+- A Mac app in the system's own look: standard sidebar, toolbar, inspector, and Settings window, with the Icelos gold as the app accent. Light and dark appearance follow the system, and twelve optional themes color the file list. The Settings window holds the default destination, the media engine, and a CPU limit.
+- A sidebar that lists the common formats first and folds the rare ones under More Formats, with search across all of them.
 
 The app's bundled FFmpeg writes every format in the catalog, including Theora (OGV), Vorbis (OGG audio), and AMR-NB, and burns in text subtitles through libass. Homebrew's FFmpeg lacks those encoders and libass, so a source build or the command line on Homebrew's FFmpeg shows them as unavailable. `mac/build-ffmpeg.sh` builds the same FFmpeg the app ships, from the pinned sources in `mac/ffmpeg-sources.txt`, and `Icelos.app/Contents/Resources/THIRD_PARTY.md` lists each bundled library and its license.
 
