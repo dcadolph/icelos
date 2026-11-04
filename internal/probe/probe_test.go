@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/dcadolph/icelos/internal/util/tooltest"
 )
 
 func TestParse(t *testing.T) {
@@ -189,9 +191,7 @@ func TestFrameRate(t *testing.T) {
 
 func TestRunMissingFile(t *testing.T) {
 	t.Parallel()
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe not installed")
-	}
+	tooltest.Require(t, "ffprobe")
 	_, err := File(t.Context(), filepath.Join(t.TempDir(), "missing.mp4"))
 	if !errors.Is(err, ErrProbe) {
 		t.Errorf("error = %v, want %v", err, ErrProbe)
@@ -200,9 +200,7 @@ func TestRunMissingFile(t *testing.T) {
 
 func TestRunChaptersAndTags(t *testing.T) {
 	t.Parallel()
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not installed")
-	}
+	tooltest.Require(t, "ffmpeg", "ffprobe")
 	dir := t.TempDir()
 	meta := filepath.Join(dir, "chapters.txt")
 	chapters := ";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1000\ntitle=One\n" +

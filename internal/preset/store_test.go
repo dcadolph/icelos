@@ -216,7 +216,7 @@ func TestNewStore(t *testing.T) {
 	t.Parallel()
 	s, err := NewStore()
 	if err != nil {
-		t.Skipf("no config dir: %v", err)
+		t.Fatalf("no config dir: %v", err)
 	}
 	if filepath.Base(s.Dir()) != "presets" || filepath.Base(filepath.Dir(s.Dir())) != "icelos" {
 		t.Errorf("Dir = %q, want .../icelos/presets", s.Dir())

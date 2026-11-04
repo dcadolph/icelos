@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -14,10 +13,8 @@ import (
 	"github.com/dcadolph/icelos/internal/format"
 	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/probe"
+	"github.com/dcadolph/icelos/internal/util/tooltest"
 )
-
-// sweepEnv turns on TestEncodeCatalog, which runs a few hundred real encodes.
-const sweepEnv = "ICELOS_SWEEP"
 
 // sweepBitrate is the video bitrate of bitrate rate controls. ffmpeg's built-in two-pass rate
 // control refuses a bitrate its coarsest quantizer cannot reach, and the noisy test pattern at
@@ -150,14 +147,7 @@ func firstRate(c format.Codec) format.RateControl {
 // produce, and checks that ffprobe reads back the codecs the target asked for.
 func TestEncodeCatalog(t *testing.T) { //nolint:funlen // Test function.
 	t.Parallel()
-	if os.Getenv(sweepEnv) == "" {
-		t.Skipf("set %s=1 to encode the catalog with the real ffmpeg", sweepEnv)
-	}
-	for _, bin := range []string{"ffmpeg", "ffprobe"} {
-		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not on PATH", bin)
-		}
-	}
+	tooltest.Require(t, "ffmpeg", "ffprobe")
 	ctx := context.Background()
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.mov")
@@ -187,7 +177,7 @@ func TestEncodeCatalog(t *testing.T) { //nolint:funlen // Test function.
 			case test.WantRefused:
 				t.Fatal("catalog accepts a target its muxer refuses")
 			case err != nil:
-				t.Skipf("catalog refuses: %v", err)
+				t.Fatalf("catalog refuses a sweep case: %v", err)
 			}
 			dest := filepath.Join(dir, fmt.Sprintf("out%d.%s", i, p.Ext()))
 			job := Job{Input: src, Output: dest, Preset: p, Hardware: test.Hardware}

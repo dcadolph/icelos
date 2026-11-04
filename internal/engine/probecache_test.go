@@ -96,7 +96,7 @@ func TestProbeCacheRelativePath(t *testing.T) {
 	testWrite(t, path, "one")
 	rel, err := filepath.Rel(mustGetwd(t), path)
 	if err != nil {
-		t.Skipf("no relative path to the temp dir: %v", err)
+		t.Fatalf("no relative path to the temp dir: %v", err)
 	}
 	inner := &testCountingProber{}
 	c := NewProbeCache(inner)

@@ -24,6 +24,7 @@ import (
 	"github.com/dcadolph/icelos/internal/format"
 	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/probe"
+	"github.com/dcadolph/icelos/internal/util/tooltest"
 )
 
 // corpusDir holds the real-world clips and their manifest.
@@ -378,14 +379,7 @@ func frameHash(ctx context.Context, path, kind string) (string, error) {
 // proves each output, and compares the outcomes to testdata/golden/corpus.json.
 func TestCorpusConvert(t *testing.T) { //nolint:funlen // Test function.
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("short mode")
-	}
-	for _, bin := range []string{"ffmpeg", "ffprobe"} {
-		if _, err := exec.LookPath(bin); err != nil {
-			t.Skipf("%s not on PATH", bin)
-		}
-	}
+	tooltest.Require(t, "ffmpeg", "ffprobe")
 	ctx := context.Background()
 	f := NewFFmpeg()
 	avail, err := f.Encoders(ctx)

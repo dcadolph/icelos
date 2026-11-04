@@ -18,6 +18,7 @@ import (
 
 	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/probe"
+	"github.com/dcadolph/icelos/internal/util/tooltest"
 )
 
 // fakeFFmpegScript is a shell stand-in for ffmpeg. MODE selects its behavior.
@@ -351,15 +352,7 @@ func TestTailBuffer(t *testing.T) {
 // TestRealFFmpeg encodes a one second 128x96 test pattern with the installed ffmpeg.
 func TestRealFFmpeg(t *testing.T) {
 	t.Parallel()
-	if testing.Short() {
-		t.Skip("short mode")
-	}
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		t.Skip("ffmpeg not installed")
-	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe not installed")
-	}
+	tooltest.Require(t, "ffmpeg", "ffprobe")
 	dir := t.TempDir()
 	src := filepath.Join(dir, "src.mov")
 	gen := exec.CommandContext(t.Context(), "ffmpeg", "-hide_banner", "-loglevel", "error",

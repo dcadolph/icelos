@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/dcadolph/icelos/internal/util/tooltest"
 )
 
 // idPattern is the form every codec and container ID must take.
@@ -185,14 +187,11 @@ func TestAllows(t *testing.T) {
 	}
 }
 
-// TestMuxersExist checks every container's muxer against the local ffmpeg when one is installed.
+// TestMuxersExist checks every container's muxer against the local ffmpeg.
 func TestMuxersExist(t *testing.T) {
 	t.Parallel()
-	bin, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
-	out, err := exec.Command(bin, "-hide_banner", "-muxers").Output()
+	tooltest.Require(t, "ffmpeg")
+	out, err := exec.Command("ffmpeg", "-hide_banner", "-muxers").Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,15 +299,12 @@ func TestContainerCodecsExist(t *testing.T) {
 	}
 }
 
-// TestEncodersExist checks every encoder name against the local ffmpeg when one is installed.
-// Encoders that need the bundled ffmpeg build or the Windows build are allowed to be missing.
+// TestEncodersExist checks every encoder name against the local ffmpeg. Encoders that need the
+// bundled ffmpeg build or the Windows build are allowed to be missing.
 func TestEncodersExist(t *testing.T) {
 	t.Parallel()
-	bin, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg not on PATH")
-	}
-	out, err := exec.Command(bin, "-hide_banner", "-encoders").Output()
+	tooltest.Require(t, "ffmpeg")
+	out, err := exec.Command("ffmpeg", "-hide_banner", "-encoders").Output()
 	if err != nil {
 		t.Fatal(err)
 	}

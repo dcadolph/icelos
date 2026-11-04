@@ -15,6 +15,7 @@ import (
 
 	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/probe"
+	"github.com/dcadolph/icelos/internal/util/tooltest"
 )
 
 // streamsInfo returns a clip with h264 video, two audio tracks, a text and a bitmap subtitle.
@@ -293,9 +294,7 @@ func streamsFixture(t *testing.T) (string, string) {
 // TestEncodeStreams runs real encodes of the stream features and probes the results.
 func TestEncodeStreams(t *testing.T) { //nolint:funlen // Test function.
 	t.Parallel()
-	if os.Getenv(sweepEnv) == "" {
-		t.Skip("set " + sweepEnv + "=1 to run real encodes")
-	}
+	tooltest.Require(t, "ffmpeg", "ffprobe")
 	src, wav := streamsFixture(t)
 	ff := NewFFmpeg()
 	filters, err := ff.Filters(t.Context())
