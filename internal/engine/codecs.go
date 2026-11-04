@@ -37,7 +37,8 @@ type videoEncoder struct {
 	// RefusedBy lists the muxers that cannot carry this encoder's output.
 	RefusedBy []string
 	// Trial is true for encoders that count as available only after a trial encode passes,
-	// because ffmpeg lists them whether or not the machine has the GPU they run on.
+	// because ffmpeg lists them whether or not the machine has the GPU or media engine they
+	// run on. A Mac without a ProRes engine, such as the base M1, lists prores_videotoolbox.
 	Trial bool
 }
 
@@ -191,7 +192,7 @@ var videoEncoders = map[string]videoEncoder{ //nolint:gochecknoglobals // Read-o
 	}},
 	"prores_videotoolbox": {Args: videoToolboxArgs([3]int{}, map[string]string{"4444xq": "xq"}),
 		PixFmts:   map[string]string{"yuv422p10le": "p210le", "yuv444p10le": "p416le"},
-		RefusedBy: []string{"mxf"}},
+		RefusedBy: []string{"mxf"}, Trial: true},
 	"dnxhd": {Args: func(s videoSpec) []string {
 		args := profileLevel(s.Video, nil)
 		if s.Bitrate > 0 {

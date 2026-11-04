@@ -287,6 +287,33 @@ func TestEncodersTrial(t *testing.T) {
 	}
 }
 
+// TestTrialMarks checks which encoders count as available only after a trial encode passes.
+func TestTrialMarks(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		Name      string
+		WantTrial bool
+	}{{ // Test 0: A base M1 lists ProRes on VideoToolbox but has no ProRes engine.
+		Name: "prores_videotoolbox", WantTrial: true,
+	}, { // Test 1: Every Mac encodes H.264 through VideoToolbox.
+		Name: "h264_videotoolbox", WantTrial: false,
+	}, { // Test 2: A GPU encoder needs the GPU.
+		Name: "h264_nvenc", WantTrial: true,
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			enc, ok := videoEncoders[test.Name]
+			if !ok {
+				t.Fatalf("no encoder %s", test.Name)
+			}
+			if diff := cmp.Diff(test.WantTrial, enc.Trial); diff != "" {
+				t.Errorf("%s trial mismatch (-want +got):\n%s", test.Name, diff)
+			}
+		})
+	}
+}
+
 func TestEncodersTrialCanceled(t *testing.T) {
 	t.Parallel()
 	f := newTestFFmpeg(t, "trialhang", probe.Info{}, nil)
