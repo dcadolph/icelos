@@ -34,6 +34,28 @@ func TestBuiltinValid(t *testing.T) {
 	}
 }
 
+// TestBuiltinNames checks the display name of every built-in preset.
+func TestBuiltinNames(t *testing.T) {
+	t.Parallel()
+	want := map[string]string{
+		"apple":      "Apple Devices",
+		"compatible": "Plays Anywhere",
+		"web":        "Web and Sharing",
+		"tiny":       "Tiny File",
+		TargetSizeID: "Fit a Size",
+		"remux":      "Change Container",
+		"audio":      "Audio Only",
+		"mp3":        "MP3",
+	}
+	got := map[string]string{}
+	for _, p := range All() {
+		got[p.ID] = p.Name
+	}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestAllReturnsCopy(t *testing.T) {
 	t.Parallel()
 	got := All()

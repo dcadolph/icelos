@@ -575,3 +575,44 @@ func TestNeedsVideoContainersAreVideo(t *testing.T) {
 		}
 	}
 }
+
+// TestCommon checks which containers the apps list at the top level, in catalog order.
+func TestCommon(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		WantIDs []string
+		Kind    Kind
+	}{{ // Test 0: The twelve common video containers.
+		Kind: KindVideo,
+		WantIDs: []string{"mp4", "mov", "mkv", "m4v", "avi", "wmv", "webm", "mpg", "ts", "m2ts",
+			"3gp", "mxf"},
+	}, { // Test 1: The eleven common audio containers.
+		Kind: KindAudio,
+		WantIDs: []string{"mp3", "m4a", "m4r", "m4b", "aac", "wav", "aiff", "flac", "alac", "ogg",
+			"opus"},
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			var got []string
+			for _, c := range Containers() {
+				if c.Kind == test.Kind && c.Common {
+					got = append(got, c.ID)
+				}
+			}
+			if diff := cmp.Diff(test.WantIDs, got); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+			for _, id := range test.WantIDs {
+				c, err := ContainerByID(id)
+				if err != nil {
+					t.Errorf("common container %q: %v", id, err)
+					continue
+				}
+				if !c.Common {
+					t.Errorf("container %q is not marked common", id)
+				}
+			}
+		})
+	}
+}

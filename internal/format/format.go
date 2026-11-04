@@ -157,6 +157,9 @@ type Container struct {
 	Muxer string `json:"muxer"`
 	// Kind is KindVideo for video containers and KindAudio for audio-only ones.
 	Kind Kind `json:"kind"`
+	// Common is true for the containers the apps list at the top level; the rest fold under More
+	// Formats.
+	Common bool `json:"common,omitempty"`
 	// Video lists the video codec IDs the container may carry, in order of preference.
 	Video []string `json:"video,omitempty"`
 	// Audio lists the audio codec IDs the container may carry, in order of preference.

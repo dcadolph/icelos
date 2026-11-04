@@ -71,7 +71,7 @@ const TargetSizeID = "target-size"
 // builtin lists the presets in display order.
 var builtin = []Preset{ //nolint:gochecknoglobals // Read-only table, copied on every access.
 	{
-		ID: "apple", Name: "Apple devices",
+		ID: "apple", Name: "Apple Devices",
 		Description: "HEVC that plays on any recent iPhone, iPad, Mac, or Apple TV at half the size of H.264.",
 		Target: format.Target{Container: "mp4",
 			Video: format.Video{Codec: "hevc", MaxWidth: 3840, MaxHeight: 2160,
@@ -79,7 +79,7 @@ var builtin = []Preset{ //nolint:gochecknoglobals // Read-only table, copied on 
 			Audio: format.Audio{Codec: "aac", Bitrate: 192_000}},
 	},
 	{
-		ID: "compatible", Name: "Plays anywhere",
+		ID: "compatible", Name: "Plays Anywhere",
 		Description: "H.264 at up to 1080p for older devices, TVs, and anything else.",
 		Target: format.Target{Container: "mp4",
 			Video: format.Video{Codec: "h264", MaxWidth: 1920, MaxHeight: 1080,
@@ -87,7 +87,7 @@ var builtin = []Preset{ //nolint:gochecknoglobals // Read-only table, copied on 
 			Audio: format.Audio{Codec: "aac", Bitrate: 160_000, Channels: 2}},
 	},
 	{
-		ID: "web", Name: "Web and sharing",
+		ID: "web", Name: "Web and Sharing",
 		Description: "H.264 at up to 1080p that starts playing before it finishes downloading.",
 		Target: format.Target{Container: "mp4",
 			Video: format.Video{Codec: "h264", MaxWidth: 1920, MaxHeight: 1080,
@@ -95,7 +95,7 @@ var builtin = []Preset{ //nolint:gochecknoglobals // Read-only table, copied on 
 			Audio: format.Audio{Codec: "aac", Bitrate: 128_000, Channels: 2}},
 	},
 	{
-		ID: "tiny", Name: "Tiny file",
+		ID: "tiny", Name: "Tiny File",
 		Description: "HEVC at up to 720p for email and chat when size matters most.",
 		Target: format.Target{Container: "mp4",
 			Video: format.Video{Codec: "hevc", MaxWidth: 1280, MaxHeight: 720,
@@ -103,7 +103,7 @@ var builtin = []Preset{ //nolint:gochecknoglobals // Read-only table, copied on 
 			Audio: format.Audio{Codec: "aac", Bitrate: 96_000, Channels: 2}},
 	},
 	{
-		ID: TargetSizeID, Name: "Fit a size",
+		ID: TargetSizeID, Name: "Fit a Size",
 		Description: "H.264 at up to 1080p, sized to land just under the limit you set.",
 		Target: format.Target{Container: "mp4",
 			Video: format.Video{Codec: "h264", MaxWidth: 1920, MaxHeight: 1080,
@@ -111,13 +111,13 @@ var builtin = []Preset{ //nolint:gochecknoglobals // Read-only table, copied on 
 			Audio: format.Audio{Codec: "aac", Bitrate: 128_000, Channels: 2}},
 	},
 	{
-		ID: "remux", Name: "Change container",
+		ID: "remux", Name: "Change Container",
 		Description: "Moves the streams into MP4 without re-encoding. Fast and lossless.",
 		Target: format.Target{Container: "mp4",
 			Video: format.Video{Codec: format.Copy}, Audio: format.Audio{Codec: format.Copy}},
 	},
 	{
-		ID: "audio", Name: "Audio only",
+		ID: "audio", Name: "Audio Only",
 		Description: "AAC audio for Music, podcasts, and voice memos.",
 		Target:      format.Target{Container: "m4a", Audio: format.Audio{Codec: "aac", Bitrate: 192_000}},
 	},
