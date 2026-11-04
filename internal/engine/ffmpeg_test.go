@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -26,6 +28,13 @@ case "$*" in *-encoders*)
 	[ "$MODE" = noencoders ] && exit 1
 	printf ' V..... = Video\n ------\n V....D libx264 x\n V....D libx265 x\n'
 	printf ' V....D h264_videotoolbox x\n V....D hevc_videotoolbox x\n A....D aac x\n'
+	case "$MODE" in trial*) printf ' V....D h264_nvenc x\n V....D hevc_qsv x\n';; esac
+	exit 0;;
+esac
+case "$*" in *lavfi*)
+	[ "$MODE" = trialfail ] && { echo "Cannot load nvcuda.dll" >&2; exit 1; }
+	[ "$MODE" = trialhang ] && { sleep 30; exit 0; }
+	case "$*" in *hevc_qsv*) exit 1;; esac
 	exit 0;;
 esac
 case "$*" in *videotoolbox*)
@@ -245,6 +254,52 @@ func TestFFmpegEncodersCached(t *testing.T) {
 	}
 	if diff := cmp.Diff(first, second); diff != "" {
 		t.Errorf("mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestEncodersTrial(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		Mode      string
+		WantNames []string
+	}{{ // Test 0: A failed trial drops a listed GPU encoder.
+		Mode: "trialfail", WantNames: []string{"aac", "h264_videotoolbox", "hevc_videotoolbox", "libx264",
+			"libx265"},
+	}, { // Test 1: A passed trial keeps it, and each encoder is tried on its own.
+		Mode: "trialpass", WantNames: []string{"aac", "h264_nvenc", "h264_videotoolbox", "hevc_videotoolbox",
+			"libx264", "libx265"},
+	}, { // Test 2: Encoders without a trial are kept without one.
+		Mode: "", WantNames: []string{"aac", "h264_videotoolbox", "hevc_videotoolbox", "libx264", "libx265"},
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			set, err := newTestFFmpeg(t, test.Mode, probe.Info{}, nil).Encoders(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := slices.Sorted(maps.Keys(set))
+			if diff := cmp.Diff(test.WantNames, got); diff != "" {
+				t.Errorf("mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestEncodersTrialCanceled(t *testing.T) {
+	t.Parallel()
+	f := newTestFFmpeg(t, "trialhang", probe.Info{}, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := f.Encoders(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want %v", err, context.DeadlineExceeded)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("canceled trial took %s", elapsed)
+	}
+	if f.avail != nil {
+		t.Error("a canceled trial cached the encoder list")
 	}
 }
 

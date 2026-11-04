@@ -42,7 +42,8 @@ const (
 type Encoder struct {
 	// Name is the ffmpeg encoder name, as "ffmpeg -encoders" lists it.
 	Name string `json:"name"`
-	// Hardware is true for encoders that run on the Media Engine through VideoToolbox.
+	// Hardware is true for encoders that run on a media engine or GPU: VideoToolbox on the Mac,
+	// and NVENC, Quick Sync, and AMF on Windows.
 	Hardware bool `json:"hardware,omitempty"`
 	// MaxSampleRate is the highest sample rate the encoder accepts, zero when the codec's own
 	// sample rates apply.

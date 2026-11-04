@@ -16,8 +16,16 @@ import (
 	"github.com/dcadolph/icelos/internal/progress"
 )
 
-// stderrTail is how many bytes of ffmpeg error output are kept for error messages.
-const stderrTail = 4096
+// Process limits and the trial encode source.
+const (
+	// stderrTail is how many bytes of ffmpeg error output are kept for error messages.
+	stderrTail = 4096
+	// trialTimeout bounds one trial encode.
+	trialTimeout = 10 * time.Second
+	// trialSource is the lavfi input of a trial encode. The frame is larger than the minimum
+	// sizes GPU encoders enforce, so a working encoder never fails its trial on size.
+	trialSource = "color=black:s=320x240:r=30:d=0.2"
+)
 
 // FFmpeg is the Encoder that drives an ffmpeg binary.
 type FFmpeg struct {
@@ -27,7 +35,7 @@ type FFmpeg struct {
 	prober Prober
 	// mu guards avail and filters.
 	mu sync.Mutex
-	// avail caches the encoder list after the first successful read.
+	// avail caches the encoder list, with failed trials removed, after the first successful read.
 	avail EncoderSet
 	// filters caches the filter list after the first successful read.
 	filters FilterSet
@@ -54,7 +62,8 @@ func (f *FFmpeg) Bin() string {
 	return f.bin
 }
 
-// Encoders returns the encoder names the ffmpeg binary offers.
+// Encoders returns the encoder names the ffmpeg binary offers, leaving out encoders whose trial
+// encode fails on this machine.
 func (f *FFmpeg) Encoders(ctx context.Context) (EncoderSet, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -72,8 +81,37 @@ func (f *FFmpeg) Encoders(ctx context.Context) (EncoderSet, error) {
 	if len(set) == 0 {
 		return nil, fmt.Errorf("%w: %s: empty list", ErrEncoders, f.bin)
 	}
+	if err := f.trial(ctx, set); err != nil {
+		return nil, err
+	}
 	f.avail = set
 	return set, nil
+}
+
+// trial removes from set each listed encoder marked for a trial whose one short encode fails.
+// Trials run one at a time, since consumer GPUs cap concurrent encode sessions and parallel
+// trials could fail on that limit alone.
+func (f *FFmpeg) trial(ctx context.Context, set EncoderSet) error {
+	var names []string
+	for name, enc := range videoEncoders {
+		if enc.Trial && set.Has(name) {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		tctx, cancel := context.WithTimeout(ctx, trialTimeout)
+		err := exec.CommandContext(tctx, f.bin, "-hide_banner", "-nostdin", "-loglevel", "error",
+			"-f", "lavfi", "-i", trialSource, "-c:v", name, "-f", "null", "-").Run()
+		cancel()
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err != nil {
+			delete(set, name)
+		}
+	}
+	return nil
 }
 
 // Filters returns the filter names the ffmpeg binary offers.

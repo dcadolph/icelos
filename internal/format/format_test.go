@@ -301,7 +301,7 @@ func TestContainerCodecsExist(t *testing.T) {
 }
 
 // TestEncodersExist checks every encoder name against the local ffmpeg when one is installed.
-// Encoders that need the bundled ffmpeg build are allowed to be missing.
+// Encoders that need the bundled ffmpeg build or the Windows build are allowed to be missing.
 func TestEncodersExist(t *testing.T) {
 	t.Parallel()
 	bin, err := exec.LookPath("ffmpeg")
@@ -318,7 +318,9 @@ func TestEncodersExist(t *testing.T) {
 			have[fields[1]] = true
 		}
 	}
-	bundled := map[string]bool{"libtheora": true, "libvorbis": true, "libopencore_amrnb": true}
+	bundled := map[string]bool{"libtheora": true, "libvorbis": true, "libopencore_amrnb": true,
+		"h264_nvenc": true, "hevc_nvenc": true, "av1_nvenc": true, "h264_qsv": true, "hevc_qsv": true,
+		"av1_qsv": true, "h264_amf": true, "hevc_amf": true, "av1_amf": true}
 	for _, c := range Codecs() {
 		for _, e := range c.Encoders {
 			if !have[e.Name] && !bundled[e.Name] {

@@ -132,6 +132,57 @@ func TestVideoEncoderArgs(t *testing.T) { //nolint:funlen // Test function.
 	}, { // Test 21: Theora variable bitrate.
 		Encoder: "libtheora", Spec: videoSpec{Video: format.Video{RateControl: format.RateVBR}, Bitrate: 2_000_000},
 		WantArgs: []string{"-b:v", "2000000"},
+	}, { // Test 22: NVENC H.264 quality is VBR with a quality target on the x264 scale.
+		Encoder: "h264_nvenc",
+		Spec: videoSpec{Video: format.Video{RateControl: format.RateQuality, Quality: format.QualityBalanced,
+			Profile: "high", Level: "4.1"}},
+		WantArgs: []string{"-profile:v", "high", "-level:v", "4.1", "-rc", "vbr", "-cq", "23"},
+	}, { // Test 23: NVENC HEVC constant bitrate.
+		Encoder: "hevc_nvenc", Spec: videoSpec{Video: format.Video{RateControl: format.RateCBR}, Bitrate: 6_000_000},
+		WantArgs: []string{"-rc", "cbr", "-b:v", "6000000"},
+	}, { // Test 24: NVENC AV1 variable bitrate caps the peak at twice the average.
+		Encoder: "av1_nvenc", Spec: videoSpec{Video: format.Video{RateControl: format.RateVBR}, Bitrate: 3_000_000},
+		WantArgs: []string{"-rc", "vbr", "-b:v", "3000000", "-maxrate", "6000000"},
+	}, { // Test 25: NVENC AV1 quality on the SVT-AV1 scale.
+		Encoder:  "av1_nvenc",
+		Spec:     videoSpec{Video: format.Video{RateControl: format.RateQuality, Quality: format.QualityHigh}},
+		WantArgs: []string{"-rc", "vbr", "-cq", "27"},
+	}, { // Test 26: Quick Sync quality is ICQ through the global quality.
+		Encoder:  "hevc_qsv",
+		Spec:     videoSpec{Video: format.Video{RateControl: format.RateQuality, Quality: format.QualitySmall}},
+		WantArgs: []string{"-global_quality", "29"},
+	}, { // Test 27: Quick Sync constant bitrate sets an equal ceiling.
+		Encoder: "h264_qsv",
+		Spec: videoSpec{Video: format.Video{RateControl: format.RateCBR, Profile: "main"},
+			Bitrate: 4_000_000},
+		WantArgs: []string{"-profile:v", "main", "-b:v", "4000000", "-maxrate", "4000000"},
+	}, { // Test 28: Quick Sync variable bitrate.
+		Encoder: "h264_qsv", Spec: videoSpec{Video: format.Video{RateControl: format.RateVBR}, Bitrate: 2_000_000},
+		WantArgs: []string{"-b:v", "2000000", "-maxrate", "4000000"},
+	}, { // Test 29: Quick Sync AV1 quality on the scaled SVT-AV1 tiers.
+		Encoder:  "av1_qsv",
+		Spec:     videoSpec{Video: format.Video{RateControl: format.RateQuality, Quality: format.QualityBalanced}},
+		WantArgs: []string{"-global_quality", "27"},
+	}, { // Test 30: AMF H.264 quality sets a QP on I, P, and B frames and renames Baseline.
+		Encoder: "h264_amf",
+		Spec: videoSpec{Video: format.Video{RateControl: format.RateQuality, Quality: format.QualityHigh,
+			Profile: "baseline"}},
+		WantArgs: []string{"-profile:v", "constrained_baseline", "-rc", "cqp", "-qp_i", "20", "-qp_p", "20",
+			"-qp_b", "20"},
+	}, { // Test 31: AMF HEVC quality has no B-frame QP.
+		Encoder:  "hevc_amf",
+		Spec:     videoSpec{Video: format.Video{RateControl: format.RateQuality, Quality: format.QualityBalanced}},
+		WantArgs: []string{"-rc", "cqp", "-qp_i", "26", "-qp_p", "26"},
+	}, { // Test 32: AMF AV1 quality on the qindex range.
+		Encoder:  "av1_amf",
+		Spec:     videoSpec{Video: format.Video{RateControl: format.RateQuality, Quality: format.QualitySmall}},
+		WantArgs: []string{"-rc", "cqp", "-qp_i", "160", "-qp_p", "160", "-qp_b", "160"},
+	}, { // Test 33: AMF constant bitrate.
+		Encoder: "hevc_amf", Spec: videoSpec{Video: format.Video{RateControl: format.RateCBR}, Bitrate: 8_000_000},
+		WantArgs: []string{"-rc", "cbr", "-b:v", "8000000"},
+	}, { // Test 34: AMF variable bitrate is peak constrained.
+		Encoder: "av1_amf", Spec: videoSpec{Video: format.Video{RateControl: format.RateVBR}, Bitrate: 2_500_000},
+		WantArgs: []string{"-rc", "vbr_peak", "-b:v", "2500000", "-maxrate", "5000000"},
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
@@ -176,6 +227,20 @@ func TestPickVideoEncoder(t *testing.T) {
 	}, { // Test 6: Software off never uses hardware.
 		Codec: "h264", Container: "mp4", Avail: EncoderSet{"h264_videotoolbox": true},
 		Want: ErrMissingEncoder,
+	}, { // Test 7: NVENC H.264 when it is the hardware encoder on offer.
+		Codec: "h264", Container: "mp4", Video: format.Video{Level: "6.0"}, Hardware: true,
+		Avail: EncoderSet{"libx264": true, "h264_nvenc": true}, WantEncoder: "h264_nvenc",
+		WantHardware: true,
+	}, { // Test 8: NVENC comes before Quick Sync and AMF when all three pass their trials.
+		Codec: "hevc", Container: "mkv", Hardware: true,
+		Avail:       EncoderSet{"libx265": true, "hevc_amf": true, "hevc_qsv": true, "hevc_nvenc": true},
+		WantEncoder: "hevc_nvenc", WantHardware: true,
+	}, { // Test 9: Quick Sync cannot take a level by name, so a level falls to software.
+		Codec: "h264", Container: "mp4", Video: format.Video{Level: "4.1"}, Hardware: true,
+		Avail: EncoderSet{"libx264": true, "h264_qsv": true}, WantEncoder: "libx264",
+	}, { // Test 10: AV1 gets a hardware encoder where a GPU offers one.
+		Codec: "av1", Container: "mkv", Hardware: true,
+		Avail: EncoderSet{"libsvtav1": true, "av1_amf": true}, WantEncoder: "av1_amf", WantHardware: true,
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {

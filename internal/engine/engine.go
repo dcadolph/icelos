@@ -19,7 +19,7 @@ type Job struct {
 	Output string `json:"output"`
 	// Preset is the conversion target.
 	Preset preset.Preset `json:"preset"`
-	// Hardware prefers the VideoToolbox encoders and falls back to software if they fail.
+	// Hardware prefers the hardware encoders and falls back to software if they fail.
 	Hardware bool `json:"hardware"`
 	// Passthrough copies every stream that already matches the preset instead of encoding it.
 	Passthrough bool `json:"passthrough,omitempty"`
@@ -99,7 +99,7 @@ type Progress struct {
 	ETA time.Duration `json:"etaNs"`
 	// Encoder is the ffmpeg video encoder in use, or empty for audio or copied video.
 	Encoder string `json:"encoder,omitempty"`
-	// Hardware is true when Encoder runs on the media engine.
+	// Hardware is true when Encoder runs on a media engine or GPU.
 	Hardware bool `json:"hardware"`
 }
 

@@ -81,3 +81,57 @@ func TestGolden(t *testing.T) {
 		})
 	}
 }
+
+// TestGoldenGPU compares the planned arguments of each Windows GPU encoder on the web and
+// compatible presets, with the preset's codec set to the encoder's, to one golden file.
+func TestGoldenGPU(t *testing.T) {
+	t.Parallel()
+	encoders := []struct {
+		Name  string
+		Codec string
+	}{
+		{Name: "h264_nvenc", Codec: "h264"}, {Name: "hevc_nvenc", Codec: "hevc"},
+		{Name: "av1_nvenc", Codec: "av1"}, {Name: "h264_qsv", Codec: "h264"},
+		{Name: "hevc_qsv", Codec: "hevc"}, {Name: "av1_qsv", Codec: "av1"},
+		{Name: "h264_amf", Codec: "h264"}, {Name: "hevc_amf", Codec: "hevc"},
+		{Name: "av1_amf", Codec: "av1"},
+	}
+	var lines []string
+	for _, enc := range encoders {
+		for _, id := range []string{"web", "compatible"} {
+			p, err := preset.Lookup(id)
+			if err != nil {
+				t.Fatalf("lookup %s: %v", id, err)
+			}
+			p.Video.Codec = enc.Codec
+			avail := EncoderSet{"libx264": true, "libx265": true, "libsvtav1": true, "aac": true,
+				enc.Name: true}
+			job := Job{Input: "in.mov", Output: "out." + p.Ext(), Preset: p, Hardware: true}
+			plan, err := Build(job, goldenInfo(), avail, "out."+p.Ext(), "passlog")
+			if err != nil {
+				t.Fatalf("build %s %s: %v", enc.Name, id, err)
+			}
+			if plan.Encoder != enc.Name || !plan.Hardware {
+				t.Fatalf("%s %s planned %s, hardware %v", enc.Name, id, plan.Encoder, plan.Hardware)
+			}
+			for _, args := range plan.Passes {
+				lines = append(lines, enc.Name+" "+id+": "+strings.Join(args, " "))
+			}
+		}
+	}
+	got := strings.Join(lines, "\n") + "\n"
+	path := filepath.Join("testdata", "golden", "gpu.txt")
+	if *update {
+		if err := os.WriteFile(path, []byte(got), 0o644); err != nil {
+			t.Fatalf("write golden: %v", err)
+		}
+		return
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	if diff := cmp.Diff(string(want), got); diff != "" {
+		t.Errorf("mismatch (-want +got):\n%s", diff)
+	}
+}

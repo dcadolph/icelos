@@ -19,7 +19,7 @@ type Plan struct {
 	Passes [][]string
 	// Encoder is the video encoder name, or empty when video is copied or absent.
 	Encoder string
-	// Hardware is true when Encoder is a VideoToolbox encoder.
+	// Hardware is true when Encoder runs on a media engine or GPU.
 	Hardware bool
 	// Filters lists the ffmpeg filters the plan needs that some ffmpeg builds lack, such as the
 	// subtitles filter, which needs libass.
@@ -87,8 +87,8 @@ func TargetVideoBitrate(target int64, dur time.Duration, audioBps int) (int, err
 // statistics under passlog. Extra holds the probed external audio files of job.Streams in order;
 // files missing from it are planned without their sample rate and channels. The video encoder is
 // the first one avail offers in the codec's catalog order that can honor the settings. When
-// job.Hardware is set, a VideoToolbox encoder comes first, except for two-pass encodes, which
-// VideoToolbox cannot run.
+// job.Hardware is set, a hardware encoder comes first, except for two-pass encodes, which no
+// hardware encoder runs.
 func Build(job Job, info probe.Info, avail EncoderSet, dest, passlog string, //nolint:funlen // Composes every pass shape.
 	extra ...probe.Info) (Plan, error) {
 	p := job.Preset
@@ -262,7 +262,7 @@ type videoPlan struct {
 	Name string
 	// Encoder is how icelos drives the encoder.
 	Encoder videoEncoder
-	// Hardware is true when the encoder is a VideoToolbox encoder.
+	// Hardware is true when the encoder runs on a media engine or GPU.
 	Hardware bool
 	// Frame is the output frame shape.
 	Frame frame
@@ -276,8 +276,8 @@ type videoPlan struct {
 }
 
 // planVideo picks the encoder and frame settings that turn the source stream src into v inside
-// container box, drawing in subtitles as b says. Hardware asks for a VideoToolbox encoder where
-// one can honor v.
+// container box, drawing in subtitles as b says. Hardware asks for a hardware encoder where one
+// can honor v.
 func planVideo(box format.Container, v format.Video, src probe.Stream, avail EncoderSet,
 	hardware bool, b burn) (videoPlan, error) {
 	codec, err := format.CodecByID(v.Codec)
@@ -333,8 +333,8 @@ func planVideo(box format.Container, v format.Video, src probe.Stream, avail Enc
 }
 
 // pickVideoEncoder returns a plan holding the first encoder for codec that avail offers, icelos
-// can drive, box can carry, and that accepts v, trying VideoToolbox encoders first when hardware
-// is set. The plan's frame and head are left for the caller.
+// can drive, box can carry, and that accepts v, trying hardware encoders first when hardware is
+// set. The plan's frame and head are left for the caller.
 func pickVideoEncoder(box format.Container, codec format.Codec, v format.Video, avail EncoderSet,
 	hardware bool) (videoPlan, error) {
 	pick := func(hw bool) (videoPlan, bool) {
