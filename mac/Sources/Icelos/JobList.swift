@@ -2,50 +2,21 @@ import AppKit
 import IcelosCore
 import SwiftUI
 
-/// JobList shows every file and its state.
+/// JobList shows every file and its state in a system list, which draws the selection, moves it
+/// with the arrow keys, and names the rows to VoiceOver.
 struct JobList: View {
     /// model is the window state.
     @Bindable var model: Converter
-    /// targeted is true while files hover.
-    let targeted: Bool
     /// editSettings gives one file its own settings in the inspector.
     let editSettings: (UUID) -> Void
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 8) {
-                    ForEach(model.items) { item in
-                        JobRow(item: item, model: model, selected: item.id == model.selection,
-                               editSettings: editSettings)
-                            .id(item.id)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-            .scrollIndicators(.automatic)
-            .focusable()
-            .focusEffectDisabled()
-            .onKeyPress(.upArrow) { move(-1, proxy) }
-            .onKeyPress(.downArrow) { move(1, proxy) }
-            .onDeleteCommand { model.removeSelection() }
-            .onExitCommand { model.selection = nil }
+        List(model.items, selection: $model.selection) { item in
+            JobRow(item: item, model: model, editSettings: editSettings)
         }
-        .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(Theme.accent.opacity(targeted ? 0.7 : 0), lineWidth: 1.5)
-                .allowsHitTesting(false)
-        }
-    }
-
-    /// move selects the file step rows away from the selection and scrolls it into view.
-    private func move(_ step: Int, _ proxy: ScrollViewProxy) -> KeyPress.Result {
-        guard !model.items.isEmpty else { return .ignored }
-        let current = model.items.firstIndex { $0.id == model.selection }
-        let next = current.map { min(max($0 + step, 0), model.items.count - 1) } ?? (step > 0 ? 0 : model.items.count - 1)
-        model.selection = model.items[next].id
-        proxy.scrollTo(model.items[next].id)
-        return .handled
+        .listStyle(.inset)
+        .onDeleteCommand { model.removeSelection() }
+        .onExitCommand { model.selection = nil }
     }
 }
 
@@ -55,10 +26,10 @@ struct JobRow: View {
     let item: Item
     /// model receives actions.
     let model: Converter
-    /// selected is true for the file the inspector follows.
-    let selected: Bool
     /// editSettings gives one file its own settings in the inspector.
     let editSettings: (UUID) -> Void
+    /// hovering is true while the pointer is over the row.
+    @State private var hovering = false
     /// reduceMotion turns off the row animations.
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -81,16 +52,14 @@ struct JobRow: View {
             Spacer(minLength: 12)
             BadgeView(badge: row.badge)
             ForEach(row.actions, id: \.self) { action in
+                let shown = action == .cancel || hovering || model.selection == item.id
                 iconButton(action) { perform(action) }
+                    .opacity(shown ? 1 : 0)
+                    .allowsHitTesting(shown)
             }
         }
-        .padding(14)
-        .background(RoundedRectangle(cornerRadius: 8).fill(selected ? Theme.raised : Theme.background.opacity(0)))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(selected ? Theme.accent.opacity(0.6) : Theme.border))
-        .contentShape(RoundedRectangle(cornerRadius: 8))
-        .onTapGesture { model.selection = item.id }
-        .accessibilityElement(children: .contain)
-        .accessibilityAddTraits(selected ? [.isSelected] : [])
+        .padding(.vertical, 6)
+        .onHover { hovering = $0 }
         .contextMenu { menu }
         .animation(Motion.animation(.easeOut(duration: 0.2), reduceMotion: reduceMotion), value: item.phase)
     }
@@ -100,15 +69,18 @@ struct JobRow: View {
     @ViewBuilder private func target(_ row: RowModel) -> some View {
         if let progress = row.progress {
             VStack(alignment: .leading, spacing: 4) {
-                GradientBar(value: progress)
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .controlSize(.small)
+                    .tint(Theme.accent)
                 detail(row)
             }
         } else if row.detail != nil {
             detail(row).textSelection(.enabled)
         } else {
             HStack(spacing: 6) {
-                if row.ownSettings { Chip(text: "Own settings", tone: .accentText) }
-                ForEach(row.chips, id: \.self) { Chip(text: $0, tone: .text) }
+                if row.ownSettings { Chip(text: "Own settings") }
+                ForEach(row.chips, id: \.self) { Chip(text: $0) }
                 if row.lossless {
                     Chip(text: "LOSSLESS", tone: .success, tracking: 0.6)
                         .help("Every stream is copied as it is. Nothing is re-encoded.")
@@ -229,12 +201,13 @@ struct BadgeView: View {
     }
 }
 
-/// Chip is one short fact about the output, e.g. "MP4" or "1920×1080".
+/// Chip is one short fact about the output, e.g. "MP4" or "1920×1080", outlined in the separator
+/// color like a badge in Music.
 struct Chip: View {
     /// text is the label.
     let text: String
     /// tone is the label color.
-    let tone: Palette.Slot
+    var tone: Palette.Slot = .muted
     /// tracking spaces the letters, for uppercase labels.
     var tracking: CGFloat = 0
 
@@ -247,6 +220,6 @@ struct Chip: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .lineLimit(1)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Theme.text.opacity(0.07)))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.border, lineWidth: 1))
     }
 }

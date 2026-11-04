@@ -197,7 +197,9 @@ public struct Palette: Hashable, Sendable {
 
 /// ThemeName is one of the themes the user can pick in Settings.
 public enum ThemeName: String, Codable, CaseIterable, Sendable {
-    /// obsidianGold is the default brand theme.
+    /// system is the default: the file list draws in the system's own colors and the app accent.
+    case system
+    /// obsidianGold is the brand theme.
     case obsidianGold
     /// harbor is the neutral theme with a teal accent.
     case harbor
@@ -223,7 +225,7 @@ public enum ThemeName: String, Codable, CaseIterable, Sendable {
     case bletchley
 
     /// standard is the theme used when none is chosen or the stored name is unknown.
-    public static let standard = ThemeName.obsidianGold
+    public static let standard = ThemeName.system
 
     /// Creates the theme for a stored name, falling back to the standard theme.
     public init(stored: String?) {
@@ -233,6 +235,7 @@ public enum ThemeName: String, Codable, CaseIterable, Sendable {
     /// name is the label shown in Settings.
     public var name: String {
         switch self {
+        case .system: "System"
         case .obsidianGold: "Obsidian & Gold"
         case .harbor: "Harbor"
         case .dragonsgale: "Dragonsgale"
@@ -250,7 +253,7 @@ public enum ThemeName: String, Codable, CaseIterable, Sendable {
 
     /// followsAppearance is true for themes with both a light and a dark palette.
     public var followsAppearance: Bool {
-        self == .obsidianGold || self == .harbor
+        self == .system || self == .obsidianGold || self == .harbor
     }
 
     /// forcedDark returns whether the theme draws dark for the appearance, or nil when it follows
@@ -264,9 +267,11 @@ public enum ThemeName: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    /// palette returns the theme's palette. Themes without a light and dark pair ignore dark.
+    /// palette returns the theme's palette. Themes without a light and dark pair ignore dark. For
+    /// System it is a stand-in for the Settings swatch only, since the window draws system colors.
     public func palette(dark: Bool) -> Palette {
         switch self {
+        case .system: Palette.systemStandIn(dark: dark)
         case .obsidianGold:
             dark
                 ? Palette(hex: ("0B0B0B", "151517", "1E1E21", "F7F4E9", "A39E92", "C9A24B"), dark: true)
@@ -295,6 +300,16 @@ extension Palette {
     /// darkSuccess and the other semantic defaults fill the slots the owner's themes do not list.
     private static let darkSuccess = "3FB37A", darkDanger = "E0604F", lightSuccess = "1F7A4D",
                        lightDanger = "B3261E"
+
+    /// systemStandIn approximates the System theme for the Settings swatch: the window background,
+    /// the label colors, and the app accent. The window itself draws system colors under System.
+    static func systemStandIn(dark: Bool) -> Palette {
+        var palette = dark
+            ? Palette(hex: ("1E1E1E", "2A2A2A", nil, "FFFFFF", "98989D", "000000"), dark: true)
+            : Palette(hex: ("FFFFFF", "FFFFFF", nil, "000000", "6E6E73", "000000"), dark: false)
+        palette.accent = systemAccent(dark: dark)
+        return palette
+    }
 
     /// Creates a palette from hex strings for background, surface, raised (nil derives it), text,
     /// muted, and accent, with the semantic colors for the appearance unless overridden.

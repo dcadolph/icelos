@@ -25,9 +25,28 @@ struct ThemeColor: ShapeStyle {
         ThemeColor(slot: slot, alpha: self.alpha * alpha)
     }
 
-    /// resolve returns the slot's color in the environment's palette.
+    /// resolve returns the slot's color: the system color under the System theme, else the slot in
+    /// the environment's palette.
     func resolve(in environment: EnvironmentValues) -> Color {
-        environment.palette.swatch(slot).color.opacity(alpha)
+        if environment.themeName == .system { return Color(nsColor: Self.system(slot)).opacity(alpha) }
+        return environment.palette.swatch(slot).color.opacity(alpha)
+    }
+
+    /// system returns the AppKit color the System theme draws a slot with, so appearance, accent,
+    /// and increased contrast come from the system.
+    static func system(_ slot: Palette.Slot) -> NSColor {
+        switch slot {
+        case .background: .windowBackgroundColor
+        case .surface: .controlBackgroundColor
+        case .raised: .unemphasizedSelectedContentBackgroundColor
+        case .text: .labelColor
+        case .muted: .secondaryLabelColor
+        case .accent, .accentText: .controlAccentColor
+        case .border: .separatorColor
+        case .success: .systemGreen
+        case .danger: .systemRed
+        case .onAccent: .alternateSelectedControlTextColor
+        }
     }
 }
 
@@ -55,16 +74,6 @@ enum Theme {
     static let onAccent = ThemeColor(slot: .onAccent)
     /// accentText is accent-colored text that reads on the background.
     static let accentText = ThemeColor(slot: .accentText)
-
-    /// backdrop is the window background, under the title bar too.
-    static var backdrop: some View {
-        Rectangle().fill(background).ignoresSafeArea()
-    }
-
-    /// fill is the surface for cards and rows, raised when selected.
-    static func fill(selected: Bool = false) -> ThemeColor {
-        selected ? raised : surface
-    }
 }
 
 /// ThemeApplier sets the theme environment and the app appearance from the stored settings.
@@ -87,27 +96,5 @@ extension View {
     /// themed draws the view with the stored theme and appearance.
     func themed() -> some View {
         modifier(ThemeApplier())
-    }
-}
-
-/// GradientBar is a slim progress bar filled with the accent.
-struct GradientBar: View {
-    /// value is the fill from 0 to 1.
-    var value: Double
-    /// reduceMotion turns off the fill animation.
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .leading) {
-                Capsule().fill(Theme.text.opacity(0.08))
-                Capsule().fill(Theme.accent)
-                    .frame(width: max(6, geo.size.width * min(1, max(0, value))))
-                    .animation(Motion.animation(.easeOut(duration: 0.35), reduceMotion: reduceMotion), value: value)
-            }
-        }
-        .frame(height: 6)
-        .accessibilityElement()
-        .accessibilityValue(Text("\(Int(value * 100)) percent"))
     }
 }

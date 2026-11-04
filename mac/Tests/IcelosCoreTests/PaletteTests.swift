@@ -3,8 +3,9 @@ import Testing
 
 @testable import IcelosCore
 
-/// everyPalette lists each theme in each appearance it draws, labeled for failure messages.
-let everyPalette: [(String, Palette)] = ThemeName.allCases.flatMap { theme in
+/// everyPalette lists each content theme in each appearance it draws, labeled for failure
+/// messages. System is left out: it draws Apple's colors, and its palette is only a swatch stand-in.
+let everyPalette: [(String, Palette)] = ThemeName.allCases.filter { $0 != .system }.flatMap { theme in
     theme.followsAppearance
         ? [("\(theme.name) dark", theme.palette(dark: true)), ("\(theme.name) light", theme.palette(dark: false))]
         : [(theme.name, theme.palette(dark: true))]
@@ -100,15 +101,21 @@ let contrastRules: [ContrastRule] = [
 }
 
 @Test func themeNames() {
-    #expect(ThemeName.allCases.count == 12)
-    #expect(Set(ThemeName.allCases.map(\.name)).count == 12)
-    #expect(ThemeName(stored: nil) == .obsidianGold)
-    #expect(ThemeName(stored: "icelos") == .obsidianGold)
+    #expect(ThemeName.allCases.count == 13)
+    #expect(ThemeName.allCases.first == .system)
+    #expect(Set(ThemeName.allCases.map(\.name)).count == 13)
+    #expect(ThemeName.system.name == "System")
+    #expect(ThemeName(stored: nil) == .system)
+    #expect(ThemeName(stored: "icelos") == .system)
     #expect(ThemeName(stored: "redcoat") == .redcoat)
-    #expect(ThemeName.allCases.filter(\.followsAppearance) == [.obsidianGold, .harbor])
+    #expect(ThemeName(stored: "obsidianGold") == .obsidianGold)
+    #expect(ThemeName.allCases.filter(\.followsAppearance) == [.system, .obsidianGold, .harbor])
 }
 
 @Test func appearanceDecidesDarkness() {
+    #expect(ThemeName.system.forcedDark(.system) == nil)
+    #expect(ThemeName.system.forcedDark(.light) == false)
+    #expect(ThemeName.system.forcedDark(.dark) == true)
     #expect(ThemeName.obsidianGold.forcedDark(.system) == nil)
     #expect(ThemeName.obsidianGold.forcedDark(.light) == false)
     #expect(ThemeName.harbor.forcedDark(.dark) == true)
@@ -156,6 +163,15 @@ private func hexComponents(in text: String) -> [String] {
 /// assetComponents returns a swatch's red, green, and blue as the "0xNN" strings bundle.sh writes.
 private func assetComponents(_ swatch: Swatch) -> [String] {
     [swatch.red, swatch.green, swatch.blue].map { String(format: "0x%02X", Int(($0 * 255).rounded())) }
+}
+
+@Test func systemStandInUsesTheAccent() {
+    for dark in [true, false] {
+        let p = ThemeName.system.palette(dark: dark)
+        #expect(p.accent == Palette.systemAccent(dark: dark))
+        #expect(p.isDark == dark)
+        #expect(p.text == (dark ? Swatch.white : Swatch.black))
+    }
 }
 
 @Test func systemAccentValues() {

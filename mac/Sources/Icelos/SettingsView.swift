@@ -23,7 +23,6 @@ struct SettingsView: View {
             output.tabItem { Label("Output", systemImage: "square.and.arrow.down") }
         }
         .frame(width: 460, height: 420)
-        .background(Theme.backdrop)
         .themed()
     }
 
@@ -39,7 +38,6 @@ struct SettingsView: View {
             List(ThemeName.allCases, id: \.self) { item in
                 Button { theme = item } label: { themeRow(item) }
                     .buttonStyle(.plain)
-                    .listRowBackground(Rectangle().fill(Theme.fill(selected: item == theme)))
             }
             .scrollContentBackground(.hidden)
         }

@@ -21,19 +21,9 @@ struct ContentView: View {
         } detail: {
             VStack(spacing: 0) {
                 if let fault = model.fault { FaultBanner(text: fault) }
-                Group {
-                    if model.items.isEmpty {
-                        DropZone(targeted: dropTargeted) { MediaFiles.choose { model.add(urls: $0) } }
-                    } else {
-                        JobList(model: model, targeted: dropTargeted, editSettings: editOwnSettings)
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
+                ContentPane(model: model, targeted: dropTargeted, editSettings: editOwnSettings)
                 BottomBar(model: model)
             }
-            .foregroundStyle(Theme.text)
-            .background(Theme.backdrop)
             .dropDestination(for: URL.self) { urls, _ in
                 let files = MediaFiles.expand(urls)
                 model.add(urls: files)
@@ -165,7 +155,7 @@ struct BottomBar: View {
     @ViewBuilder private var summary: some View {
         if let progress = model.overallProgress {
             HStack(spacing: 10) {
-                GradientBar(value: progress).frame(width: 140)
+                ProgressView(value: progress).frame(width: 140)
                 Text("\(Int(progress * 100))%").monospacedDigit().foregroundStyle(Theme.muted)
             }
         } else if model.savedBytes > 0 {
@@ -193,40 +183,5 @@ struct FaultBanner: View {
             .padding(.horizontal, 20)
             .padding(.top, 12)
             .textSelection(.enabled)
-    }
-}
-
-/// DropZone is the empty state that invites files.
-struct DropZone: View {
-    /// targeted is true while files hover.
-    let targeted: Bool
-    /// choose opens the file picker.
-    let choose: () -> Void
-    /// reduceMotion turns off the hover animation.
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(nsImage: NSApplication.shared.applicationIconImage)
-                .resizable()
-                .frame(width: 96, height: 96)
-                .accessibilityHidden(true)
-            Text("Drop videos or music here")
-                .font(.title3.weight(.medium))
-            Text("Form is never final.")
-                .foregroundStyle(Theme.muted)
-            Button("Choose Files…", action: choose)
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .padding(.top, 4)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background {
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [7, 6]))
-                .foregroundStyle(targeted ? Theme.accent : Theme.border)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Theme.accent.opacity(targeted ? 0.08 : 0)))
-        }
-        .animation(Motion.animation(.easeOut(duration: 0.2), reduceMotion: reduceMotion), value: targeted)
     }
 }

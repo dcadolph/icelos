@@ -106,6 +106,15 @@ private func rubricCatalog() throws -> Catalog {
         #expect(unnamed.isEmpty, "\(unnamed)")
     }
 
+    // Rubric 18: the hand-rolled progress bar, backdrop, and key handling are gone; the system
+    // List and ProgressView draw them.
+    @Test func noGradientBar() throws {
+        let files = try sources()
+        #expect(hits("GradientBar", in: files).isEmpty)
+        #expect(hits("Theme.backdrop", in: files).isEmpty)
+        #expect(hits("onKeyPress", in: files).isEmpty)
+    }
+
     // Rubric 14: Reduce Motion turns animations off.
     @Test func reduceMotionDropsAnimation() {
         #expect(Motion.animation(.easeOut(duration: 0.2), reduceMotion: true) == nil)

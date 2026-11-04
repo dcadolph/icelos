@@ -14,6 +14,7 @@ func withScratchDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
     withScratchDefaults { defaults in
         let settings = AppSettings(defaults: defaults)
         #expect(settings.theme == .standard)
+        #expect(settings.theme == .system)
         #expect(settings.appearance == .system)
         #expect(settings.outputFolder == nil)
         #expect(settings.useMediaEngine == true)
@@ -39,7 +40,7 @@ func withScratchDefaults(_ body: (UserDefaults) throws -> Void) rethrows {
         defaults.set("no-such-theme", forKey: AppSettings.Key.theme)
         defaults.set("sepia", forKey: AppSettings.Key.appearance)
         let settings = AppSettings(defaults: defaults)
-        #expect(settings.theme == .standard)
+        #expect(settings.theme == .system)
         #expect(settings.appearance == .system)
     }
 }
