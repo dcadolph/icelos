@@ -1,11 +1,6 @@
 package cmd
 
 import (
-	"context"
-	"fmt"
-	"os"
-	"path/filepath"
-
 	"github.com/spf13/cobra"
 
 	"github.com/dcadolph/icelos/cmd/config"
@@ -25,20 +20,14 @@ and exits.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			enc, prober := newEngine()
+			// Replanning after a settings change reuses the probe of an unchanged file.
+			prober = engine.NewProbeCache(prober)
 			store, err := preset.NewStore()
 			if err != nil {
 				return err
 			}
-			cache, err := os.UserCacheDir()
-			if err != nil {
-				return fmt.Errorf("thumbnail cache: %w", err)
-			}
-			thumbs := filepath.Join(cache, "icelos", "thumbs")
-			thumbnail := func(ctx context.Context, r engine.ThumbnailRequest) (string, error) {
-				return enc.Thumbnail(ctx, thumbs, r)
-			}
 			srv := serve.New(cmd.OutOrStdout(), serve.Config{Encoder: enc, Prober: prober,
-				Encoders: enc.Encoders, Thumbnail: thumbnail, Presets: store, Version: resolveVersion(),
+				Encoders: enc.Encoders, Presets: store, Version: resolveVersion(),
 				Workers: config.Workers()})
 			return srv.Run(cmd.Context(), cmd.InOrStdin())
 		},

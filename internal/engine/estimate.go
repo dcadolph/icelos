@@ -8,9 +8,9 @@ import (
 	"github.com/dcadolph/icelos/internal/probe"
 )
 
-// The estimate model, measured for the Mac app on 2026-11-03. The values are variables, not
-// constants, so every expression rounds at run time the way the app's Double arithmetic does
-// and both sides answer the same byte counts.
+// The estimate model, measured on 2026-11-03. The values are variables, not constants, so every
+// expression rounds at run time the way the Mac app's Double arithmetic did when the model lived
+// there, and the captured answers in the tests still hold to the byte.
 var ( //nolint:gochecknoglobals // Read-only model data.
 	// estimateOverhead is the container's share on top of the streams.
 	estimateOverhead = 1.01
@@ -39,10 +39,12 @@ var ( //nolint:gochecknoglobals // Read-only model data.
 		"av1":  scaledRatios(h264Ratios, 0.7),
 		"vp9":  scaledRatios(h264Ratios, 0.8),
 	}
-	// hardwareRatios are the same bounds measured on the Apple media engine.
-	hardwareRatios = map[string][3]ratio{
-		"h264": {{0.1741, 0.4687}, {0.0517, 0.1112}, {0.0257, 0.0909}},
-		"hevc": {{0.0454, 0.1107}, {0.0232, 0.0777}, {0.0135, 0.0506}},
+	// encoderRatios are the same bounds measured on one encoder, by encoder name. An encoder
+	// listed here takes its own ratios in place of its codec's software ratios. The Windows GPU
+	// encoders share the software encoders' quality scale and are not listed.
+	encoderRatios = map[string][3]ratio{
+		"h264_videotoolbox": {{0.1741, 0.4687}, {0.0517, 0.1112}, {0.0257, 0.0909}},
+		"hevc_videotoolbox": {{0.0454, 0.1107}, {0.0232, 0.0777}, {0.0135, 0.0506}},
 	}
 )
 
@@ -52,20 +54,6 @@ type SizeRange struct {
 	Low int64 `json:"low"`
 	// High is the largest expected size in bytes.
 	High int64 `json:"high"`
-}
-
-// Point reports whether the estimate is one size.
-func (r SizeRange) Point() bool {
-	return r.Low == r.High
-}
-
-// Saving returns how much smaller the high bound is than source as a whole percent, negative
-// when the output is larger, and false when either size is unknown.
-func (r SizeRange) Saving(source int64) (int, bool) {
-	if source <= 0 || r.High <= 0 {
-		return 0, false
-	}
-	return int(math.Round((1 - float64(r.High)/float64(source)) * 100)), true
 }
 
 // ratio is the low and high share of the source video bitrate an encode keeps.
@@ -89,28 +77,37 @@ func scaledRatios(rs [3]ratio, factor float64) [3]ratio {
 	return rs
 }
 
-// Estimate predicts the output size of info converted to t before any encode. It is a formula,
-// never a measurement. Quality mode gives a range, and copy, target size, and bitrate modes
-// give a point. size is the target size the user asked for when t aims for one and holds none,
-// and hardware is true when the plan runs on the Apple media engine, whose ratios were measured
-// on their own. GPU encoders on Windows share the software encoders' quality scale and take
-// the software ratios. It returns false when the formula has nothing to go on.
-func Estimate(info probe.Info, t format.Target, size int64, hardware bool) (SizeRange, bool) {
+// PlanEstimate predicts the output size of job converted the way plan says: streams the plan
+// copies count at their source size, and the plan's video encoder picks the ratios. It returns
+// false when the formula has nothing to go on.
+func PlanEstimate(job Job, info probe.Info, plan Plan) (SizeRange, bool) {
+	t := job.Preset.Target
+	if plan.Copied.Video != nil && plan.Copied.Video.Copy {
+		t.Video.Codec = format.Copy
+	}
+	if plan.Copied.Audio != nil && plan.Copied.Audio.Copy {
+		t.Audio.Codec = format.Copy
+	}
+	return Estimate(info, t, plan.Encoder)
+}
+
+// Estimate predicts the output size of info converted to t by the video encoder named encoder
+// before any encode. It is a formula, never a measurement. Quality mode gives a range, and copy,
+// target size, and bitrate modes give a point. It returns false when the formula has nothing to
+// go on.
+func Estimate(info probe.Info, t format.Target, encoder string) (SizeRange, bool) {
 	_, hasAudio := info.FirstAudio()
 	if t.Video.Codec == format.Copy && (t.Audio.Codec == format.Copy || !hasAudio) {
 		return SizeRange{Low: info.Size, High: info.Size}, info.Size > 0
 	}
 	if t.Video.RateControl == format.RateTwoPass && t.Video.Bitrate == 0 {
-		if t.TargetBytes != 0 {
-			size = t.TargetBytes
-		}
-		return SizeRange{Low: size, High: size}, size != 0
+		return SizeRange{Low: t.TargetBytes, High: t.TargetBytes}, t.TargetBytes != 0
 	}
 	if info.Duration <= 0 {
 		return SizeRange{}, false
 	}
 	seconds := float64(info.Duration) / 1e9
-	video, ok := estimateVideo(info, t.Video, hardware)
+	video, ok := estimateVideo(info, t.Video, encoder)
 	if !ok {
 		return SizeRange{}, false
 	}
@@ -129,8 +126,8 @@ func Estimate(info probe.Info, t format.Target, size int64, hardware bool) (Size
 
 // estimateVideo returns the expected video bitrate in bits per second as a low and high bound,
 // equal outside quality mode and zero when the output carries no video. It returns false when
-// the codec has no measured ratio or the source bitrate is unknown.
-func estimateVideo(info probe.Info, v format.Video, hardware bool) (ratio, bool) {
+// neither the encoder nor the codec has a measured ratio or the source bitrate is unknown.
+func estimateVideo(info probe.Info, v format.Video, encoder string) (ratio, bool) {
 	src, ok := info.FirstVideo()
 	if v.Codec == "" || !ok {
 		return ratio{}, true
@@ -143,9 +140,9 @@ func estimateVideo(info probe.Info, v format.Video, hardware bool) (ratio, bool)
 		b := float64(v.Bitrate)
 		return ratio{Low: b, High: b}, v.Bitrate != 0
 	}
-	table, measured := softwareRatios[v.Codec]
-	if hw, ok := hardwareRatios[v.Codec]; hardware && ok {
-		table, measured = hw, true
+	table, measured := encoderRatios[encoder]
+	if !measured {
+		table, measured = softwareRatios[v.Codec]
 	}
 	if !measured || !known {
 		return ratio{}, false

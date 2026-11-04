@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -22,8 +23,9 @@ type estimateWant struct {
 	OK bool
 }
 
-// swiftEstimates holds what the Mac app's Estimate.bytes answers for each case in
-// estimateCases, captured from the app's own code on 2026-11-03.
+// swiftEstimates holds what the Mac app's Estimate.bytes answered for each case in
+// estimateCases, captured from the app's own code on 2026-11-03 before the formula moved here.
+// A label ending in true or hw ran with the media engine on.
 var swiftEstimates = map[string]estimateWant{ //nolint:gochecknoglobals // Not modified, simplifies testing.
 	"cal/apple/false":         {Low: 8506978, High: 23993434, OK: true},
 	"cal/apple/true":          {Low: 9390355, High: 24533276, OK: true},
@@ -85,10 +87,18 @@ type estimateCase struct {
 	Info probe.Info
 	// Target is the output settings.
 	Target format.Target
-	// Size is the target size the user asked for.
-	Size int64
-	// Hardware is true for the media engine.
-	Hardware bool
+	// Encoder is the video encoder the plan picked.
+	Encoder string
+}
+
+// testEngineEncoder returns the video encoder a plan picks for t with the media engine on or off:
+// VideoToolbox for H.264 and HEVC when on, else a software encoder, which shares the codec's
+// software ratios.
+func testEngineEncoder(t format.Target, on bool) string {
+	if on && (t.Video.Codec == "h264" || t.Video.Codec == "hevc") {
+		return t.Video.Codec + "_videotoolbox"
+	}
+	return ""
 }
 
 // estimateClip returns the probe of a 1920 by 1080 H.264 clip with stereo AAC.
@@ -121,8 +131,12 @@ func estimateCases(t *testing.T) []estimateCase { //nolint:funlen // Test table.
 	var cases []estimateCase
 	for _, id := range ids {
 		for _, hw := range []bool{false, true} {
+			tg := builtinTarget(t, id)
+			if id == preset.TargetSizeID {
+				tg.TargetBytes = 25_000_000
+			}
 			cases = append(cases, estimateCase{Label: fmt.Sprintf("cal/%s/%v", id, hw), Info: calibrationClip(),
-				Target: builtinTarget(t, id), Size: 25_000_000, Hardware: hw})
+				Target: tg, Encoder: testEngineEncoder(tg, hw)})
 		}
 	}
 	fixtures := []struct {
@@ -132,8 +146,9 @@ func estimateCases(t *testing.T) []estimateCase { //nolint:funlen // Test table.
 	for _, fx := range fixtures {
 		for _, id := range []string{"apple", "compatible", "web", "tiny"} {
 			for _, hw := range []bool{false, true} {
+				tg := builtinTarget(t, id)
 				cases = append(cases, estimateCase{Label: fmt.Sprintf("%s/%s/%v", fx.Name, id, hw),
-					Info: estimateClip(20*time.Second, fx.Size), Target: builtinTarget(t, id), Hardware: hw})
+					Info: estimateClip(20*time.Second, fx.Size), Target: tg, Encoder: testEngineEncoder(tg, hw)})
 			}
 		}
 	}
@@ -167,9 +182,9 @@ func estimateCases(t *testing.T) []estimateCase { //nolint:funlen // Test table.
 		})},
 		estimateCase{Label: "uhd/compatible", Info: resized(3840, 2160, 0), Target: builtinTarget(t, "compatible")},
 		estimateCase{Label: "uhd/web/hw", Info: resized(3840, 2160, 0), Target: builtinTarget(t, "web"),
-			Hardware: true},
+			Encoder: testEngineEncoder(builtinTarget(t, "web"), true)},
 		estimateCase{Label: "av1/hw", Info: cal, Target: with("web", func(tg *format.Target) { tg.Video.Codec = "av1" }),
-			Hardware: true},
+			Encoder: "libsvtav1"},
 		estimateCase{Label: "vp9", Info: cal, Target: with("web", func(tg *format.Target) { tg.Video.Codec = "vp9" })},
 		estimateCase{Label: "mpeg2", Info: cal, Target: with("compatible", func(tg *format.Target) {
 			tg.Video.Codec = "mpeg2video"
@@ -182,7 +197,7 @@ func estimateCases(t *testing.T) []estimateCase { //nolint:funlen // Test table.
 		})},
 		estimateCase{Label: "sized", Info: cal, Target: with("target-size", func(tg *format.Target) {
 			tg.TargetBytes = 8_000_000
-		}), Size: 25_000_000},
+		})},
 		estimateCase{Label: "target/none", Info: cal, Target: builtinTarget(t, "target-size")},
 		estimateCase{Label: "q9", Info: cal, Target: with("web", func(tg *format.Target) { tg.Video.Quality = 9 })},
 		estimateCase{Label: "mono", Info: cal, Target: with("mp3", func(tg *format.Target) { tg.Audio.Channels = 1 })},
@@ -205,7 +220,7 @@ func TestEstimate(t *testing.T) {
 			if !ok {
 				t.Fatalf("no captured answer for %s", test.Label)
 			}
-			r, gotOK := Estimate(test.Info, test.Target, test.Size, test.Hardware)
+			r, gotOK := Estimate(test.Info, test.Target, test.Encoder)
 			got := estimateWant{Low: r.Low, High: r.High, OK: gotOK}
 			if !gotOK {
 				got = estimateWant{}
@@ -217,32 +232,174 @@ func TestEstimate(t *testing.T) {
 	}
 }
 
-func TestSizeRangeSaving(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		In         SizeRange
-		Source     int64
-		WantResult int
-		WantOK     bool
-		WantPoint  bool
-	}{{ // Test 0: Smaller, from the high bound.
-		In: SizeRange{Low: 8_000_000, High: 48_000_000}, Source: 165_000_000, WantResult: 71, WantOK: true,
-	}, { // Test 1: Larger is negative.
-		In: SizeRange{Low: 30, High: 30}, Source: 20, WantResult: -50, WantOK: true, WantPoint: true,
-	}, { // Test 2: Within half a percent is the same size.
-		In: SizeRange{Low: 1004, High: 1004}, Source: 1000, WantOK: true, WantPoint: true,
-	}, { // Test 3: Unknown source size.
-		In: SizeRange{Low: 1, High: 2},
-	}, { // Test 4: Empty estimate.
-		Source: 100, WantPoint: true,
+// measuredPoints holds the output sizes of the calibration clip through `icelos convert` with
+// the media engine on and a 25MB target, from the 2026-11-02 run, for the presets the estimate
+// answers with one size.
+var measuredPoints = map[string]int64{ //nolint:gochecknoglobals // Not modified, simplifies testing.
+	"target-size": 24_364_457,
+	"remux":       181_765_227,
+	"audio":       2_173_256,
+	"mp3":         2_155_527,
+}
+
+// qualityFixture is a 20 second quality calibration clip with its measured output sizes.
+type qualityFixture struct {
+	// Name tells the fixtures apart in test output.
+	Name string
+	// Info is the clip's probe.
+	Info probe.Info
+	// Software holds output sizes by preset ID with the media engine off.
+	Software map[string]int64
+	// Hardware holds output sizes by preset ID with the media engine on.
+	Hardware map[string]int64
+}
+
+// qualityFixtures returns the two 20 second clips from the wolf-eye-bird reference looped,
+// encoded with h264_videotoolbox at 16 Mb/s and AAC at 256 kb/s, clean and with
+// `noise=alls=6:allf=t`, and the 2026-11-03 sizes of the quality presets through `icelos serve`.
+func qualityFixtures() []qualityFixture {
+	return []qualityFixture{{
+		Name: "clean", Info: estimateClip(20*time.Second, 11_653_883),
+		Software: map[string]int64{"apple": 1_724_081, "compatible": 1_698_516, "web": 1_331_200, "tiny": 605_143},
+		Hardware: map[string]int64{"apple": 1_754_605, "compatible": 2_394_222, "web": 1_599_243, "tiny": 603_763},
+	}, {
+		Name: "grainy", Info: estimateClip(20*time.Second, 43_393_755),
+		Software: map[string]int64{"apple": 2_234_214, "compatible": 22_710_486, "web": 7_228_001, "tiny": 560_670},
+		Hardware: map[string]int64{"apple": 2_469_503, "compatible": 20_770_089, "web": 2_582_508, "tiny": 605_796},
 	}}
+}
+
+// qualityPresetIDs are the built-in presets that use the quality rate control.
+func qualityPresetIDs() []string {
+	return []string{"apple", "compatible", "web", "tiny"}
+}
+
+// keptRatio inverts the estimate formula: the share of the source video bitrate an output of
+// bytes kept, for the same audio, frame, and overhead terms the estimate uses.
+func keptRatio(t *testing.T, bytes int64, info probe.Info, tg format.Target) float64 {
+	t.Helper()
+	src, ok := sourceVideoBitrate(info)
+	video, vok := info.FirstVideo()
+	if !ok || !vok {
+		t.Fatal("calibration clip has no source bitrate or video")
+	}
+	seconds := float64(info.Duration) / 1e9
+	bits := float64(bytes)*8/seconds/estimateOverhead - estimateAudio(info, tg.Audio)
+	return bits / src / areaScale(video, tg.Video)
+}
+
+func TestEstimatePointNearMeasured(t *testing.T) {
+	t.Parallel()
+	for id, want := range measuredPoints {
+		t.Run(id, func(t *testing.T) {
+			t.Parallel()
+			tg := builtinTarget(t, id)
+			if id == preset.TargetSizeID {
+				tg.TargetBytes = 25_000_000
+			}
+			got, ok := Estimate(calibrationClip(), tg, testEngineEncoder(tg, true))
+			if !ok || got.Low != got.High {
+				t.Fatalf("estimate = %+v %v, want one size", got, ok)
+			}
+			if off := math.Abs(float64(got.High)/float64(want) - 1); off > 0.35 {
+				t.Errorf("estimate %d is %.0f%% off the measured %d, want within 35%%", got.High, off*100, want)
+			}
+		})
+	}
+}
+
+func TestEstimateRangeHoldsMeasured(t *testing.T) {
+	t.Parallel()
+	for _, id := range qualityPresetIDs() {
+		for _, hw := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%v", id, hw), func(t *testing.T) {
+				t.Parallel()
+				tg := builtinTarget(t, id)
+				for _, fx := range qualityFixtures() {
+					want := fx.Software[id]
+					if hw {
+						want = fx.Hardware[id]
+					}
+					got, ok := Estimate(fx.Info, tg, testEngineEncoder(tg, hw))
+					if !ok || got.Low == got.High {
+						t.Fatalf("%s: estimate = %+v %v, want a range", fx.Name, got, ok)
+					}
+					if want < got.Low || want > got.High {
+						t.Errorf("%s: measured %d outside %d to %d", fx.Name, want, got.Low, got.High)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestEstimateBoundsNearMeasured(t *testing.T) {
+	t.Parallel()
+	cal := calibrationClip()
+	src, _ := sourceVideoBitrate(cal)
+	video, _ := cal.FirstVideo()
+	for _, id := range qualityPresetIDs() {
+		for _, hw := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%v", id, hw), func(t *testing.T) {
+				t.Parallel()
+				tg := builtinTarget(t, id)
+				var kept []float64
+				for _, fx := range qualityFixtures() {
+					size := fx.Software[id]
+					if hw {
+						size = fx.Hardware[id]
+					}
+					kept = append(kept, keptRatio(t, size, fx.Info, tg))
+				}
+				bounds, ok := estimateVideo(cal, tg.Video, testEngineEncoder(tg, hw))
+				if !ok {
+					t.Fatal("no video bounds")
+				}
+				area := areaScale(video, tg.Video)
+				for _, bound := range []float64{bounds.Low / src / area, bounds.High / src / area} {
+					nearest := math.Inf(1)
+					for _, k := range kept {
+						nearest = min(nearest, math.Abs(math.Log(bound/k)))
+					}
+					if nearest > math.Log(2) {
+						t.Errorf("bound %.4f is more than 2x from every measured ratio %v", bound, kept)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestEstimateEncoderRatios(t *testing.T) {
+	t.Parallel()
+	web := builtinTarget(t, "web")
+	av1 := web
+	av1.Video.Codec = "av1"
+	tests := []struct {
+		Target    format.Target
+		Encoder   string
+		Other     string
+		WantEqual bool
+	}{{ // Test 0: The media engine has its own ratios.
+		Target: web, Encoder: "h264_videotoolbox", Other: "libx264",
+	}, { // Test 1: A GPU encoder shares the software ratios.
+		Target: web, Encoder: "h264_nvenc", Other: "libx264", WantEqual: true,
+	}, { // Test 2: No encoder at all falls back to the codec's software ratios.
+		Target: web, Encoder: "", Other: "libx264", WantEqual: true,
+	}, { // Test 3: AV1 has no measured encoder.
+		Target: av1, Encoder: "libsvtav1", Other: "", WantEqual: true,
+	}}
+	cal := calibrationClip()
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
 			t.Parallel()
-			got, ok := test.In.Saving(test.Source)
-			want := [3]any{test.WantResult, test.WantOK, test.WantPoint}
-			if diff := cmp.Diff(want, [3]any{got, ok, test.In.Point()}); diff != "" {
-				t.Errorf("mismatch (-want +got):\n%s", diff)
+			a, aok := estimateVideo(cal, test.Target.Video, test.Encoder)
+			b, bok := estimateVideo(cal, test.Target.Video, test.Other)
+			if !aok || !bok {
+				t.Fatalf("bounds missing: %v %v", aok, bok)
+			}
+			if diff := cmp.Diff(test.WantEqual, a == b); diff != "" {
+				t.Errorf("equal mismatch (-want +got):\n%s\n%+v against %+v", diff, a, b)
 			}
 		})
 	}

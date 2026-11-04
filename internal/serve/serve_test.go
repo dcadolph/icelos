@@ -76,38 +76,38 @@ func testSessionWith(t *testing.T, store *preset.Store) (*io.PipeWriter, *testOu
 		return os.WriteFile(job.Output, nil, 0o600)
 	})
 	prober := engine.ProberFunc(func(_ context.Context, path string) (probe.Info, error) {
-		if strings.HasSuffix(path, "missing.mov") {
-			return probe.Info{}, probe.ErrProbe
-		}
-		info := probe.Info{Format: "mov", Duration: time.Second, Streams: []probe.Stream{
-			{Index: 0, Kind: "video", Codec: "h264", Width: 1920, Height: 1080, AvgFrameRate: "30/1"},
-			{Index: 1, Kind: "audio", Codec: "aac", Channels: 2, SampleRate: 48000},
-		}}
-		if strings.HasSuffix(path, ".m4a") {
-			info.Streams = info.Streams[1:]
-		}
-		if strings.Contains(path, "chapters") {
-			info.Chapters = []probe.Chapter{{End: time.Second / 2, Title: "One"},
-				{Start: time.Second / 2, End: time.Second, Title: "Two"}}
-		}
-		return info, nil
+		return testProbe(path)
 	})
 	encoders := func(context.Context) (engine.EncoderSet, error) {
 		return engine.EncoderSet{"libx264": true, "hevc_videotoolbox": true, "aac": true, "png": true}, nil
 	}
-	thumbnail := func(_ context.Context, r engine.ThumbnailRequest) (string, error) {
-		if strings.Contains(r.Path, "broken") {
-			return "", engine.ErrThumbnail
-		}
-		return fmt.Sprintf("%s@%dx%d+%s.png", r.Path, r.Width, r.Height, r.At), nil
-	}
 	out := &testOutput{}
-	srv := New(out, Config{Encoder: enc, Prober: prober, Encoders: encoders, Thumbnail: thumbnail,
-		Presets: store, Version: "v0.0.0-test"})
+	srv := New(out, Config{Encoder: enc, Prober: prober, Encoders: encoders, Presets: store,
+		Version: "v0.0.0-test"})
 	pr, pw := io.Pipe()
 	done := make(chan error, 1)
 	go func() { done <- srv.Run(t.Context(), pr) }()
 	return pw, out, done
+}
+
+// testProbe returns the fake probe of path: a one second 1080p clip with stereo audio, audio
+// only for .m4a, two chapters when the name says chapters, and a probe error for missing.mov.
+func testProbe(path string) (probe.Info, error) {
+	if strings.HasSuffix(path, "missing.mov") {
+		return probe.Info{}, probe.ErrProbe
+	}
+	info := probe.Info{Format: "mov", Duration: time.Second, Size: 1_000_000, Streams: []probe.Stream{
+		{Index: 0, Kind: "video", Codec: "h264", Width: 1920, Height: 1080, AvgFrameRate: "30/1"},
+		{Index: 1, Kind: "audio", Codec: "aac", Channels: 2, SampleRate: 48000},
+	}}
+	if strings.HasSuffix(path, ".m4a") {
+		info.Streams = info.Streams[1:]
+	}
+	if strings.Contains(path, "chapters") {
+		info.Chapters = []probe.Chapter{{End: time.Second / 2, Title: "One"},
+			{Start: time.Second / 2, End: time.Second, Title: "Two"}}
+	}
+	return info, nil
 }
 
 // testSend writes requests as lines.
@@ -308,7 +308,28 @@ func TestPlan(t *testing.T) { //nolint:funlen // Test function.
 		}
 		return v.Reason
 	}
+	info, err := testProbe(clip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	estimate := func(id, encoder string) *engine.SizeRange {
+		t.Helper()
+		p, err := preset.Lookup(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r, ok := engine.Estimate(info, p.Target, encoder)
+		if !ok {
+			t.Fatalf("no estimate for %s on %s", id, encoder)
+		}
+		return &r
+	}
+	tinyHardware := estimate("tiny", "hevc_videotoolbox")
+	if soft := estimate("tiny", "libx265"); *soft == *tinyHardware {
+		t.Fatalf("tiny estimate %+v is the same on hardware and software", soft)
+	}
 	tests := []struct {
+		WantEstimate *engine.SizeRange
 		Reply        string
 		WantError    string
 		WantVideo    string
@@ -320,18 +341,21 @@ func TestPlan(t *testing.T) { //nolint:funlen // Test function.
 		WantHardware bool
 	}{
 		{Reply: "p0", WantVideo: "copy", WantAudio: "copy", WantEncoder: "libx264",
-			WantCopied: "passthrough off passthrough off", WantPasses: 1}, // Test 0: Copyable source.
+			WantCopied: "passthrough off passthrough off", WantPasses: 1,
+			WantEstimate: estimate("compatible", "libx264")}, // Test 0: Copyable source.
 		{Reply: "p1", WantVideo: engine.ReasonResize, WantAudio: "copy", WantEncoder: "libx264",
 			WantCopied: "resize passthrough off", WantPasses: 1}, // Test 1: Resize rules video out.
 		{Reply: "p2", WantVideo: engine.ReasonCodec, WantAudio: "copy", WantEncoder: "hevc_videotoolbox",
-			WantCopied: "codec passthrough off", WantHardware: true, WantPasses: 1}, // Test 2: Hardware HEVC.
+			WantCopied: "codec passthrough off", WantHardware: true, WantPasses: 1,
+			WantEstimate: tinyHardware}, // Test 2: Hardware HEVC takes the media engine ratios.
 		{Reply: "p3", WantError: "stream selection invalid"}, // Test 3: Bad streams.
 		{Reply: "p4", WantError: "probe failed"},             // Test 4: Probe failure.
 		{Reply: "p5", WantVideo: "copy", WantAudio: "copy", WantEncoder: "libx264",
 			WantCopied: "passthrough off passthrough off", WantPasses: 1}, // Test 5: Probed external audio.
 		{Reply: "p6", WantError: "input has no video"}, // Test 6: Audio file, video preset.
 		{Reply: "p7", WantVideo: "copy", WantAudio: "copy", WantCopied: "copy copy", WantLossless: true,
-			WantPasses: 1}, // Test 7: Passthrough copies a copyable source.
+			WantPasses: 1, WantEstimate: &engine.SizeRange{Low: info.Size, High: info.Size},
+		}, // Test 7: Passthrough copies a copyable source at its own size.
 		{Reply: "p8", WantVideo: engine.ReasonResize, WantAudio: "copy", WantEncoder: "libx264",
 			WantCopied: "resize copy", WantPasses: 1}, // Test 8: Passthrough with a resize.
 	}
@@ -357,6 +381,11 @@ func TestPlan(t *testing.T) { //nolint:funlen // Test function.
 			if p.Lossless != test.WantLossless || p.Encoder != test.WantEncoder ||
 				p.Hardware != test.WantHardware || len(p.Passes) != test.WantPasses {
 				t.Errorf("plan = %+v", p)
+			}
+			if test.WantEstimate != nil {
+				if diff := cmp.Diff(test.WantEstimate, p.Estimate); diff != "" {
+					t.Errorf("estimate mismatch (-want +got):\n%s", diff)
+				}
 			}
 		})
 	}
@@ -428,8 +457,7 @@ func TestWriteError(t *testing.T) {
 	enc := engine.EncoderFunc(func(context.Context, engine.Job, engine.ReportFunc) error { return nil })
 	prober := engine.ProberFunc(func(context.Context, string) (probe.Info, error) { return probe.Info{}, nil })
 	srv := New(testFailWriter{}, Config{Encoder: enc, Prober: prober, Presets: preset.WithDir(t.TempDir()),
-		Encoders:  func(context.Context) (engine.EncoderSet, error) { return nil, nil },
-		Thumbnail: func(context.Context, engine.ThumbnailRequest) (string, error) { return "", nil }})
+		Encoders: func(context.Context) (engine.EncoderSet, error) { return nil, nil }})
 	if err := srv.Run(t.Context(), strings.NewReader(`{"op":"presets"}`)); !errors.Is(err, ErrWrite) {
 		t.Errorf("error = %v, want %v", err, ErrWrite)
 	}
@@ -445,10 +473,6 @@ func TestNewPanics(t *testing.T) {
 		W: nil, Cfg: Config{Encoder: enc},
 	}, { // Test 1: Missing prober and encoders.
 		W: &bytes.Buffer{}, Cfg: Config{Encoder: enc},
-	}, { // Test 2: Missing thumbnail maker.
-		W: &bytes.Buffer{}, Cfg: Config{Encoder: enc, Encoders: func(context.Context) (engine.EncoderSet, error) {
-			return nil, nil
-		}, Prober: engine.ProberFunc(probe.File), Presets: preset.WithDir(t.TempDir())},
 	}}
 	for testNum, test := range tests {
 		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
@@ -587,96 +611,6 @@ func TestCustomPresets(t *testing.T) { //nolint:funlen // Test function.
 	}
 	if d1 := waitFor(t, out, byReply("d1")); d1.Error != `unknown preset: "mine"` {
 		t.Errorf("second delete = %+v", d1)
-	}
-	if err := in.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-done; err != nil {
-		t.Errorf("Run = %v", err)
-	}
-}
-
-func TestEstimateAndThumbnail(t *testing.T) { //nolint:funlen // Test function.
-	t.Parallel()
-	dir := t.TempDir()
-	clip := filepath.Join(dir, "clip.mov")
-	if err := os.WriteFile(clip, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// cal is the Mac app's 90 second calibration clip, whose estimates the app's tests capture.
-	cal := `"info":{"format":"mov","durationNs":90000000000,"size":181765278,"streams":[` +
-		`{"index":0,"codec_type":"video","codec_name":"h264","width":1920,"height":1080},` +
-		`{"index":1,"codec_type":"audio","codec_name":"aac","channels":2}]}`
-	in, out, done := testSession(t)
-	testSend(t, in,
-		`{"id":"e0","op":"estimate","input":"`+clip+`","preset":"web","hardware":false,`+cal+`}`,
-		`{"id":"e1","op":"estimate","input":"`+clip+`","preset":"web",`+cal+`}`,
-		`{"id":"e2","op":"estimate","input":"`+clip+`","preset":"apple",`+cal+`}`,
-		`{"id":"e3","op":"estimate","input":"`+clip+`","preset":"target-size","size":"25MB",`+cal+`}`,
-		`{"id":"e4","op":"estimate","input":"`+clip+`","preset":"target-size",`+cal+`}`,
-		`{"id":"e5","op":"estimate","input":"`+clip+`","preset":"remux",`+cal+`}`,
-		`{"id":"e6","op":"estimate","input":"`+clip+`","preset":"web"}`,
-		`{"id":"e7","op":"estimate","input":"`+filepath.Join(dir, "missing.mov")+`","preset":"web"}`,
-		`{"id":"e8","op":"estimate","preset":"web"}`,
-		`{"id":"t0","op":"thumbnail","path":"`+clip+`","width":96}`,
-		`{"id":"t1","op":"thumbnail","path":"`+clip+`","seconds":1.5}`,
-		`{"id":"t2","op":"thumbnail","path":"broken.mov"}`,
-		`{"id":"t3","op":"thumbnail"}`,
-	)
-	saving := func(n int) *int { return &n }
-	tests := []struct {
-		WantEstimate  *Estimate
-		Reply         string
-		WantError     string
-		WantThumbnail string
-	}{{ // Test 0: Software web on the calibration clip matches the app's range.
-		Reply: "e0", WantEstimate: &Estimate{Low: 15_639_307, High: 33_330_544, SavingPercent: saving(82)},
-	}, { // Test 1: Hardware on with no VideoToolbox H.264 encoder plans software and its ratios.
-		Reply: "e1", WantEstimate: &Estimate{Low: 15_639_307, High: 33_330_544, SavingPercent: saving(82)},
-	}, { // Test 2: A VideoToolbox plan takes the media engine ratios.
-		Reply: "e2", WantEstimate: &Estimate{Low: 9_390_355, High: 24_533_276, SavingPercent: saving(87)},
-	}, { // Test 3: Target size is the size asked for.
-		Reply: "e3", WantEstimate: &Estimate{Low: 25_000_000, High: 25_000_000, Point: true,
-			SavingPercent: saving(86)},
-	}, { // Test 4: Target size without a size is refused like plan.
-		Reply: "e4", WantError: "needs a size",
-	}, { // Test 5: A copy is the source size.
-		Reply: "e5", WantEstimate: &Estimate{Low: 181_765_278, High: 181_765_278, Point: true,
-			SavingPercent: saving(0)},
-	}, { // Test 6: A probe without a size leaves nothing to go on.
-		Reply: "e6",
-	}, { // Test 7: A probe failure.
-		Reply: "e7", WantError: "probe failed",
-	}, { // Test 8: No input.
-		Reply: "e8", WantError: "input required",
-	}, { // Test 9: A thumbnail with a box width.
-		Reply: "t0", WantThumbnail: clip + "@96x0+0s.png",
-	}, { // Test 10: A thumbnail at a set time.
-		Reply: "t1", WantThumbnail: clip + "@0x0+1.5s.png",
-	}, { // Test 11: A thumbnail failure.
-		Reply: "t2", WantError: "thumbnail failed",
-	}, { // Test 12: No path.
-		Reply: "t3", WantError: "path required",
-	}}
-	for testNum, test := range tests {
-		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
-			got := waitFor(t, out, byReply(test.Reply))
-			if test.WantError != "" {
-				if got.Type != TypeError || !strings.Contains(got.Error, test.WantError) {
-					t.Errorf("reply = %q %q, want error containing %q", got.Type, got.Error, test.WantError)
-				}
-				return
-			}
-			if got.Type == TypeError {
-				t.Fatalf("error reply: %s", got.Error)
-			}
-			if diff := cmp.Diff(test.WantEstimate, got.Estimate); diff != "" {
-				t.Errorf("estimate mismatch (-want +got):\n%s", diff)
-			}
-			if diff := cmp.Diff(test.WantThumbnail, got.Thumbnail); diff != "" {
-				t.Errorf("thumbnail mismatch (-want +got):\n%s", diff)
-			}
-		})
 	}
 	if err := in.Close(); err != nil {
 		t.Fatal(err)

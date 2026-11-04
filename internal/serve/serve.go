@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/dcadolph/icelos/internal/engine"
 	"github.com/dcadolph/icelos/internal/format"
@@ -46,15 +45,6 @@ const (
 	OpAdd = "add"
 	// OpPlan answers what an add request with the same fields would run, without queueing it.
 	OpPlan = "plan"
-	// OpEstimate answers the expected output size of the plan an add request with the same
-	// fields would run, from Request.Info when set or else a probe of Request.Input. Streams the
-	// plan copies count at their source size. The reply carries no estimate when the formula
-	// has nothing to go on.
-	OpEstimate = "estimate"
-	// OpThumbnail makes one frame of Request.Path into a PNG fitted inside Request.Width by
-	// Request.Height and answers its path. The frame is taken Request.Seconds in, or two
-	// seconds in or halfway through a shorter file, and kept in a cache for the next request.
-	OpThumbnail = "thumbnail"
 	// OpCancel cancels Request.Job.
 	OpCancel = "cancel"
 	// OpList asks for every job.
@@ -81,18 +71,10 @@ type Request struct {
 	ID string `json:"id,omitempty"`
 	// Op is the operation name.
 	Op string `json:"op"`
-	// Path is the file to probe or make a thumbnail of.
+	// Path is the file to probe.
 	Path string `json:"path,omitempty"`
 	// Input is the file to convert.
 	Input string `json:"input,omitempty"`
-	// Info is a probe result estimate uses instead of probing Input.
-	Info *probe.Info `json:"info,omitempty"`
-	// Width is the thumbnail box width in pixels. Zero is 192.
-	Width int `json:"width,omitempty"`
-	// Height is the thumbnail box height in pixels. Zero is 108.
-	Height int `json:"height,omitempty"`
-	// Seconds is where in the file the thumbnail frame is taken. Zero picks the default.
-	Seconds float64 `json:"seconds,omitempty"`
 	// Preset is the preset ID for add and preset.delete.
 	Preset string `json:"preset,omitempty"`
 	// PresetBody is a whole preset. For add it is used instead of Preset, so a file can carry
@@ -100,7 +82,7 @@ type Request struct {
 	PresetBody *preset.Preset `json:"presetBody,omitempty"`
 	// Size is the target size for the target-size preset, e.g. "25MB".
 	Size string `json:"size,omitempty"`
-	// Hardware prefers VideoToolbox. Absent means true.
+	// Hardware prefers a hardware encoder: the Apple media engine or a GPU. Absent means true.
 	Hardware *bool `json:"hardware,omitempty"`
 	// OutDir is the folder for the output. Empty means next to the input.
 	OutDir string `json:"outDir,omitempty"`
@@ -143,10 +125,6 @@ type Message struct {
 	Info *probe.Info `json:"info,omitempty"`
 	// Plan is the answer to a plan request.
 	Plan *Plan `json:"plan,omitempty"`
-	// Estimate is the answer to an estimate request, absent when there is no estimate.
-	Estimate *Estimate `json:"estimate,omitempty"`
-	// Thumbnail is the image path that answers a thumbnail request.
-	Thumbnail string `json:"thumbnail,omitempty"`
 	// Status is one job snapshot. For add it is the first job the request became.
 	Status *queue.Status `json:"status,omitempty"`
 	// Jobs lists every job for list, and for add every job a split request became.
@@ -177,23 +155,13 @@ type Plan struct {
 	Passes [][]string `json:"passes"`
 	// Encoder is the video encoder, empty when video is copied or absent.
 	Encoder string `json:"encoder,omitempty"`
-	// Hardware is true when Encoder runs on the media engine.
+	// Hardware is true when Encoder is a hardware encoder: the Apple media engine or a GPU.
 	Hardware bool `json:"hardware"`
 	// Filters lists the filters the plan needs that some ffmpeg builds lack.
 	Filters []string `json:"filters,omitempty"`
-}
-
-// Estimate is an expected output size in bytes.
-type Estimate struct {
-	// Low is the smallest expected size.
-	Low int64 `json:"low"`
-	// High is the largest expected size.
-	High int64 `json:"high"`
-	// Point is true when the estimate is one size, as copy, target size, and bitrate modes give.
-	Point bool `json:"point"`
-	// SavingPercent is how much smaller High is than the source as a whole percent, negative
-	// when the output is larger, and absent when the source size is unknown.
-	SavingPercent *int `json:"savingPercent,omitempty"`
+	// Estimate is the expected output size in bytes, a range in quality mode and one size
+	// otherwise, absent when the formula has nothing to go on.
+	Estimate *engine.SizeRange `json:"estimate,omitempty"`
 }
 
 // planPassLog is the two-pass statistics path shown in plans. Real encodes use a fresh temporary
@@ -221,9 +189,6 @@ func NewCatalog(set engine.EncoderSet) Catalog {
 // EncodersFunc reports the encoders ffmpeg offers.
 type EncodersFunc func(ctx context.Context) (engine.EncoderSet, error)
 
-// ThumbnailFunc makes a thumbnail image and returns its path.
-type ThumbnailFunc func(ctx context.Context, r engine.ThumbnailRequest) (string, error)
-
 // Config holds what a Server needs.
 type Config struct {
 	// Encoder runs jobs.
@@ -232,8 +197,6 @@ type Config struct {
 	Prober engine.Prober
 	// Encoders lists the available encoders.
 	Encoders EncodersFunc
-	// Thumbnail makes thumbnail images.
-	Thumbnail ThumbnailFunc
 	// Presets holds the custom presets and the recent list.
 	Presets *preset.Store
 	// Version is reported in the ready and capabilities messages.
@@ -261,9 +224,8 @@ func New(w io.Writer, cfg Config) *Server {
 	if w == nil {
 		panic("serve.New: writer required")
 	}
-	if cfg.Encoder == nil || cfg.Prober == nil || cfg.Encoders == nil || cfg.Thumbnail == nil ||
-		cfg.Presets == nil {
-		panic("serve.New: Encoder, Prober, Encoders, Thumbnail, and Presets required")
+	if cfg.Encoder == nil || cfg.Prober == nil || cfg.Encoders == nil || cfg.Presets == nil {
+		panic("serve.New: Encoder, Prober, Encoders, and Presets required")
 	}
 	s := &Server{cfg: cfg, out: json.NewEncoder(w)}
 	s.q = queue.WithWorkers(cfg.Encoder, cfg.Prober, max(1, cfg.Workers), func(st queue.Status) {
@@ -402,39 +364,6 @@ func (s *Server) handle(ctx context.Context, req Request, wg *sync.WaitGroup) {
 			}
 			s.send(Message{Type: req.Op, Reply: req.ID, Plan: &p})
 		}()
-	case OpEstimate:
-		job, err := s.jobFor(req)
-		if err != nil {
-			s.fail(req.ID, err)
-			return
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			e, err := s.estimate(ctx, job, req.Info)
-			if err != nil {
-				s.fail(req.ID, err)
-				return
-			}
-			s.send(Message{Type: req.Op, Reply: req.ID, Estimate: e})
-		}()
-	case OpThumbnail:
-		if req.Path == "" {
-			s.fail(req.ID, fmt.Errorf("%w: path required", ErrRequest))
-			return
-		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			at := time.Duration(req.Seconds * float64(time.Second))
-			path, err := s.cfg.Thumbnail(ctx, engine.ThumbnailRequest{Path: req.Path, Width: req.Width,
-				Height: req.Height, At: at})
-			if err != nil {
-				s.fail(req.ID, err)
-				return
-			}
-			s.send(Message{Type: req.Op, Reply: req.ID, Thumbnail: path})
-		}()
 	case OpCancel:
 		if err := s.q.Cancel(req.Job); err != nil {
 			s.fail(req.ID, err)
@@ -531,57 +460,12 @@ func (s *Server) plan(ctx context.Context, job engine.Job, outDir string) (Plan,
 	if err != nil {
 		return Plan{}, err
 	}
-	return Plan{Copy: c, Copied: built.Copied, Lossless: built.Copied.Lossless(), Output: dest,
-		Passes: built.Passes, Encoder: built.Encoder, Hardware: built.Hardware, Filters: built.Filters}, nil
-}
-
-// estimate returns the expected output size of job, the way the app's file row shows it: the
-// plan's copied streams count at their source size, and the media engine's own ratios apply
-// only when the plan runs on VideoToolbox. info stands in for a probe of the input when set.
-// It returns nil when the formula has nothing to go on.
-func (s *Server) estimate(ctx context.Context, job engine.Job, info *probe.Info) (*Estimate, error) {
-	var src probe.Info
-	if info != nil {
-		src = *info
-	} else {
-		var err error
-		if src, err = s.cfg.Prober.Probe(ctx, job.Input); err != nil {
-			return nil, err
-		}
+	p := Plan{Copy: c, Copied: built.Copied, Lossless: built.Copied.Lossless(), Output: dest,
+		Passes: built.Passes, Encoder: built.Encoder, Hardware: built.Hardware, Filters: built.Filters}
+	if r, ok := engine.PlanEstimate(job, info, built); ok {
+		p.Estimate = &r
 	}
-	extra := make([]probe.Info, 0, len(job.Streams.ExternalAudio))
-	for _, path := range job.Streams.ExternalAudio {
-		ext, err := s.cfg.Prober.Probe(ctx, path)
-		if err != nil {
-			return nil, err
-		}
-		extra = append(extra, ext)
-	}
-	set, err := s.cfg.Encoders(ctx)
-	if err != nil {
-		return nil, err
-	}
-	built, err := engine.Build(job, src, set, "estimate."+job.Preset.Ext(), planPassLog, extra...)
-	if err != nil {
-		return nil, err
-	}
-	t := job.Preset.Target
-	if built.Copied.Video != nil && built.Copied.Video.Copy {
-		t.Video.Codec = format.Copy
-	}
-	if built.Copied.Audio != nil && built.Copied.Audio.Copy {
-		t.Audio.Codec = format.Copy
-	}
-	engineRatios := built.Hardware && strings.HasSuffix(built.Encoder, "_videotoolbox")
-	r, ok := engine.Estimate(src, t, job.Preset.TargetBytes, engineRatios)
-	if !ok {
-		return nil, nil //nolint:nilnil // No estimate is an answer, not an error.
-	}
-	e := &Estimate{Low: r.Low, High: r.High, Point: r.Point()}
-	if saving, ok := r.Saving(src.Size); ok {
-		e.SavingPercent = &saving
-	}
-	return e, nil
+	return p, nil
 }
 
 // presetFor returns the inline preset of an add request after validating it, or else the named
