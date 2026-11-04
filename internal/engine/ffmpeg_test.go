@@ -52,9 +52,7 @@ printf 'fps=30\nout_time_us=10000000\nspeed=2.5x\nprogress=end\n'
 func newTestFFmpeg(t *testing.T, mode string, info probe.Info, probeErr error) *FFmpeg {
 	t.Helper()
 	bin := filepath.Join(t.TempDir(), "ffmpeg")
-	if err := os.WriteFile(bin, []byte(fmt.Sprintf(fakeFFmpegScript, mode)), 0o700); err != nil { //nolint:gosec // Test script.
-		t.Fatal(err)
-	}
+	tooltest.WriteScript(t, bin, fmt.Sprintf(fakeFFmpegScript, mode))
 	return WithFFmpeg(bin, ProberFunc(func(context.Context, string) (probe.Info, error) {
 		return info, probeErr
 	}))

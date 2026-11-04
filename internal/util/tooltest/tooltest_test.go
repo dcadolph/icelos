@@ -2,6 +2,10 @@ package tooltest
 
 import (
 	"fmt"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -54,6 +58,50 @@ func TestRequire(t *testing.T) {
 			}
 			if diff := cmp.Diff(test.WantMessage, r.Message); diff != "" {
 				t.Errorf("message mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestWriteScript(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		WantOutput string
+		Workers    int
+		Runs       int
+	}{{ // Test 0: One script runs and prints its output.
+		Workers: 1, Runs: 1, WantOutput: "ran\n",
+	}, { // Test 1: Scripts written and run at once from many goroutines never hit a busy file.
+		Workers: 8, Runs: 40, WantOutput: "ran\n",
+	}}
+	for testNum, test := range tests {
+		t.Run(fmt.Sprintf("test %d", testNum), func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			var wg sync.WaitGroup
+			errs := make(chan string, test.Workers*test.Runs)
+			for w := range test.Workers {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					for range test.Runs {
+						path := filepath.Join(dir, fmt.Sprintf("tool-%d", w))
+						WriteScript(t, path, "#!/bin/sh\necho ran\n")
+						out, err := exec.Command(path).Output()
+						if err != nil || string(out) != test.WantOutput {
+							errs <- fmt.Sprintf("%s: %v: %q", filepath.Base(path), err, out)
+						}
+					}
+				}()
+			}
+			wg.Wait()
+			close(errs)
+			var failed []string
+			for e := range errs {
+				failed = append(failed, e)
+			}
+			if diff := cmp.Diff("", strings.Join(failed, "\n")); diff != "" {
+				t.Errorf("script runs failed (-want +got):\n%s", diff)
 			}
 		})
 	}

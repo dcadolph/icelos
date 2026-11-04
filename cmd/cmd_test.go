@@ -18,6 +18,7 @@ import (
 	"github.com/dcadolph/icelos/internal/preset"
 	"github.com/dcadolph/icelos/internal/queue"
 	"github.com/dcadolph/icelos/internal/serve"
+	"github.com/dcadolph/icelos/internal/util/tooltest"
 )
 
 // testFFprobe prints a fixed two-stream probe result.
@@ -47,9 +48,7 @@ func testTools(t *testing.T) (string, string) {
 	dir := t.TempDir()
 	ffmpeg, ffprobe := filepath.Join(dir, "ffmpeg"), filepath.Join(dir, "ffprobe")
 	for path, body := range map[string]string{ffmpeg: testFFmpeg, ffprobe: testFFprobe} {
-		if err := os.WriteFile(path, []byte(body), 0o700); err != nil { //nolint:gosec // Test script.
-			t.Fatal(err)
-		}
+		tooltest.WriteScript(t, path, body)
 	}
 	return ffmpeg, ffprobe
 }
