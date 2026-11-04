@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -300,7 +301,8 @@ func TestContainerCodecsExist(t *testing.T) {
 }
 
 // TestEncodersExist checks every encoder name against the local ffmpeg. Encoders that need the
-// bundled ffmpeg build or the Windows build are allowed to be missing.
+// bundled ffmpeg build or the Windows build are allowed to be missing, and so are the
+// VideoToolbox and AudioToolbox encoders off the Mac.
 func TestEncodersExist(t *testing.T) {
 	t.Parallel()
 	tooltest.Require(t, "ffmpeg")
@@ -317,9 +319,12 @@ func TestEncodersExist(t *testing.T) {
 	bundled := map[string]bool{"libtheora": true, "libvorbis": true, "libopencore_amrnb": true,
 		"h264_nvenc": true, "hevc_nvenc": true, "av1_nvenc": true, "h264_qsv": true, "hevc_qsv": true,
 		"av1_qsv": true, "h264_amf": true, "hevc_amf": true, "av1_amf": true}
+	apple := func(name string) bool {
+		return strings.HasSuffix(name, "_videotoolbox") || strings.HasSuffix(name, "_at")
+	}
 	for _, c := range Codecs() {
 		for _, e := range c.Encoders {
-			if !have[e.Name] && !bundled[e.Name] {
+			if !have[e.Name] && !bundled[e.Name] && (runtime.GOOS == "darwin" || !apple(e.Name)) {
 				t.Errorf("codec %q uses encoder %q, which ffmpeg does not list", c.ID, e.Name)
 			}
 		}
