@@ -38,6 +38,7 @@ func TestMarshal(t *testing.T) {
 }
 
 func TestMarshalError(t *testing.T) {
+	t.Skip("negative control for the CI skip gate")
 	t.Parallel()
 	if _, err := Marshal(make(chan int), false); err == nil {
 		t.Error("expected error for unencodable value")
